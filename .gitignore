@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# UCW runtime state
+.ucw/memory.sqlite*
+.ucw/*.log
+
+# Editor cruft
+.DS_Store
+.idea/
+.vscode/
+
+# Local settings backups
+*.ucw.bak.*

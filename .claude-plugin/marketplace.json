@@ -1,0 +1,45 @@
+{
+  "name": "ucw",
+  "description": "Ultimate Claude Code Workflow — sub-plugins for à la carte install.",
+  "owner": {
+    "name": "UCW"
+  },
+  "plugins": [
+    {
+      "name": "ucw-core",
+      "source": "./plugins/ucw-core",
+      "description": "Required core: memory MCP, workflow agents, verification gates, base skills, base commands.",
+      "required": true
+    },
+    {
+      "name": "ucw-orchestration",
+      "source": "./plugins/ucw-orchestration",
+      "description": "Multi-agent orchestrators, worktree fan-out, `/ucw watch` PR autopilot."
+    },
+    {
+      "name": "ucw-security",
+      "source": "./plugins/ucw-security",
+      "description": "AgentShield-style scanner, security-reviewer agent, `/audit` command."
+    },
+    {
+      "name": "ucw-lang-typescript",
+      "source": "./plugins/ucw-lang-typescript",
+      "description": "TypeScript expert agent, rules, and idiom skills."
+    },
+    {
+      "name": "ucw-lang-python",
+      "source": "./plugins/ucw-lang-python",
+      "description": "Python expert agent, rules, and idiom skills."
+    },
+    {
+      "name": "ucw-lang-go",
+      "source": "./plugins/ucw-lang-go",
+      "description": "Go expert agent, rules, and idiom skills."
+    },
+    {
+      "name": "ucw-lang-rust",
+      "source": "./plugins/ucw-lang-rust",
+      "description": "Rust expert agent, rules, and idiom skills."
+    }
+  ]
+}

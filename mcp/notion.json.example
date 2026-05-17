@@ -1,0 +1,12 @@
+{
+  "_doc": "Optional: route Knowledge writes through Notion. Copy to ~/.claude/mcp.json under mcpServers.notion, set integration token and parent page id.",
+  "notion": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@notionhq/notion-mcp-server"],
+    "env": {
+      "NOTION_API_KEY": "secret_...",
+      "NOTION_PARENT_PAGE_ID": "..."
+    }
+  }
+}

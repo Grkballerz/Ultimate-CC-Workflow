@@ -1,0 +1,10 @@
+{
+  "ucwMemory": {
+    "type": "stdio",
+    "command": "python",
+    "args": ["-m", "ucw_memory.server"],
+    "env": {
+      "UCW_MEMORY_HOME": "${HOME}/.claude/ucw"
+    }
+  }
+}
