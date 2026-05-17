@@ -195,4 +195,7 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except BrokenPipeError:
+        sys.exit(0)

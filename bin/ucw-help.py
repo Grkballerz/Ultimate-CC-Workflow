@@ -54,7 +54,7 @@ def cmd_overview(_args: argparse.Namespace) -> int:
     counts = {
         "agents":   len(list((REPO / "agents").glob("*.md"))),
         "commands": len(list((REPO / "commands").glob("*.md"))),
-        "hooks":    len(list((REPO / "hooks").glob("*.py"))),
+        "hooks":    len([p for p in (REPO / "hooks").glob("*.py") if not p.name.startswith("_")]),
         "skills":   len(list((REPO / "skills").rglob("SKILL.md"))),
         "bin":      len(list((REPO / "bin").glob("*.py"))),
     }
@@ -160,4 +160,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        # Stdout closed early (e.g. piped to head) — exit silently.
+        sys.exit(0)

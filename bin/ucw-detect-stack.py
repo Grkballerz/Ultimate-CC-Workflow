@@ -312,7 +312,15 @@ def detect(root: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str]) -> int:
-    root = Path(argv[1]).resolve() if len(argv) > 1 else Path.cwd()
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="ucw-detect-stack",
+        description="Detect a project's stack from manifest files. Emits structured JSON.",
+    )
+    parser.add_argument("project_root", nargs="?", default=".",
+                        help="project root (default: current directory)")
+    args = parser.parse_args(argv[1:])
+    root = Path(args.project_root).resolve()
     if not root.is_dir():
         print(f"not a directory: {root}", file=sys.stderr)
         return 2
@@ -322,4 +330,7 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except BrokenPipeError:
+        sys.exit(0)
