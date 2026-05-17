@@ -164,3 +164,24 @@ def test_post_tool_use_handles_nonexistent_file(project):
     })
     assert rc == 0
     assert out == ""
+
+
+def test_post_tool_use_rejects_path_outside_project(project):
+    """Defense in depth: edits to /etc/passwd or other out-of-project paths
+    must not increment the streak or trigger any check."""
+    _rc, out, _ = _run("post-tool-use.py", {
+        "cwd": str(project), "tool_input": {"file_path": "/etc/passwd"}
+    })
+    assert out == ""
+    streak_file = project / ".ucw" / "state" / "edit-streak"
+    assert not streak_file.exists() or streak_file.read_text().strip() == "0"
+
+
+def test_post_tool_use_rejects_relative_escape(project):
+    """`../../../etc/passwd` resolves outside the project — must be ignored."""
+    _rc, out, _ = _run("post-tool-use.py", {
+        "cwd": str(project), "tool_input": {"file_path": "../../../etc/passwd"}
+    })
+    assert out == ""
+    streak_file = project / ".ucw" / "state" / "edit-streak"
+    assert not streak_file.exists() or streak_file.read_text().strip() == "0"

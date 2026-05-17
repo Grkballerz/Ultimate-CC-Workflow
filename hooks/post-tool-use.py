@@ -78,6 +78,15 @@ CHECKERS = {
 }
 
 
+def _is_inside(path: Path, root: Path) -> bool:
+    """True if `path` resolves to something under `root` (no escape via ..)."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def main() -> int:
     payload = read_payload()
     tool_input = payload.get("tool_input", {}) or {}
@@ -85,10 +94,18 @@ def main() -> int:
     if not file_arg:
         return 0
 
+    root = project_root(payload)
     file_path = Path(file_arg)
     if not file_path.is_absolute():
-        file_path = project_root(payload) / file_path
+        file_path = root / file_path
     if not file_path.exists():
+        return 0
+
+    # Defense in depth: only act on files inside the project root. Edits to
+    # paths outside (system files, other projects) don't count toward the
+    # streak and don't get syntax-checked here.
+    if not _is_inside(file_path, root):
+        log(payload, f"ignored edit outside project root: {file_path}")
         return 0
 
     streak = _increment_edit_streak(payload)

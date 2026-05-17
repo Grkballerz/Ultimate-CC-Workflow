@@ -87,10 +87,9 @@ merge_settings() {
     log "[DRY] would merge $fragment into $CLAUDE_SETTINGS"
     return
   fi
-  local tmp
-  tmp="$(mktemp)"
-  jq -s '.[0] * .[1]' "$CLAUDE_SETTINGS" "$fragment" > "$tmp"
-  mv "$tmp" "$CLAUDE_SETTINGS"
+  # Use our smart merger (preserves user hooks, idempotent on reinstall).
+  python3 "$REPO_ROOT/bin/ucw-merge-settings.py" \
+    --inplace "$CLAUDE_SETTINGS" "$fragment"
 }
 
 install_rules() {
@@ -195,17 +194,11 @@ verify_install() {
 uninstall() {
   log "removing UCW from $CLAUDE_HOME"
   run rm -rf "$CLAUDE_HOME/rules/ucw" "$UCW_HOME/hooks" "$UCW_HOME/bin" "$UCW_HOME/lib"
-  # Strip ucw entries from settings.json
+  # Strip ucw entries from settings.json while preserving the user's own.
   if [[ -f "$CLAUDE_SETTINGS" && $DRY_RUN -eq 0 ]]; then
-    local tmp
-    tmp="$(mktemp)"
-    jq '
-      walk(
-        if type == "object" and has("command") and (.command | tostring | test("ucw"))
-        then empty else . end
-      )
-    ' "$CLAUDE_SETTINGS" > "$tmp" 2>/dev/null || cp "$CLAUDE_SETTINGS" "$tmp"
-    mv "$tmp" "$CLAUDE_SETTINGS"
+    python3 "$REPO_ROOT/bin/ucw-merge-settings.py" \
+      --uninstall --inplace "$CLAUDE_SETTINGS" \
+      2>/dev/null || warn "could not strip UCW entries from $CLAUDE_SETTINGS"
   fi
   # Strip ucw-memory MCP entry
   if [[ -f "$CLAUDE_HOME/mcp.json" && $DRY_RUN -eq 0 ]]; then
