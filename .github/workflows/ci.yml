@@ -39,6 +39,8 @@ jobs:
       - name: Install test deps
         run: pip install pytest
       - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/memory
         run: |
           if [ -d tests ] && find tests -name 'test_*.py' -print -quit | grep -q .; then
             pytest -q tests

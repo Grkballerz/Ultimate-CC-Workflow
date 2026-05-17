@@ -82,18 +82,28 @@ install_hooks() {
   log "installed hooks to $UCW_HOME/hooks"
 }
 
+install_bin() {
+  mkdir -p "$UCW_HOME/bin"
+  cp -r "$REPO_ROOT/bin/." "$UCW_HOME/bin/"
+  chmod +x "$UCW_HOME/bin"/*.py 2>/dev/null || true
+  log "installed bin helpers to $UCW_HOME/bin (add to PATH: export PATH=\"\$HOME/.claude/ucw/bin:\$PATH\")"
+}
+
 install_memory_deps() {
+  # The FTS5 path is stdlib-only. The package itself just needs to be importable.
   if command -v uv >/dev/null 2>&1; then
-    log "installing memory deps via uv"
+    log "installing ucw-memory via uv pip install -e ./memory"
     (cd "$REPO_ROOT/memory" && uv pip install --quiet -e . 2>/dev/null) || \
-      warn "skipped memory deps (uv install failed — install manually later)"
+      warn "uv install failed — falling back to PYTHONPATH"
   elif command -v pip >/dev/null 2>&1; then
-    log "installing memory deps via pip"
-    pip install --quiet sqlite-vec anthropic voyageai 2>/dev/null || \
-      warn "skipped memory deps (pip install failed — install manually later)"
+    log "installing ucw-memory via pip install -e ./memory"
+    pip install --quiet -e "$REPO_ROOT/memory" 2>/dev/null || \
+      warn "pip install failed — falling back to PYTHONPATH"
   else
-    warn "no Python package manager found — memory MCP will not work until deps are installed"
+    warn "no Python package manager — ucw_memory.server will rely on PYTHONPATH"
   fi
+  # Always export PYTHONPATH as a safety net for the MCP server.
+  log "tip: if MCP can't find ucw_memory, set PYTHONPATH=$REPO_ROOT/memory in your shell"
 }
 
 register_mcp() {
@@ -155,6 +165,7 @@ fi
 case "$PROFILE" in
   minimal|standard|full)
     install_rules
+    install_bin
     [[ "$PROFILE" != "minimal" ]] && install_hooks
     install_memory_deps
     register_mcp

@@ -2,14 +2,9 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 import time
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
-
-from memory.server import init_db  # noqa: E402
+from ucw_memory.db import init_db
 
 
 def test_schema_applies(tmp_path):
@@ -22,17 +17,14 @@ def test_schema_applies(tmp_path):
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        # core tables present
         for expected in {
             "facts", "embeddings", "instincts", "sessions",
             "work_items", "work_item_sessions", "schema_version",
         }:
             assert expected in tables, f"missing table: {expected}"
 
-        # FTS virtual table also present
         assert "facts_fts" in tables
 
-        # schema version recorded
         version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
         assert version == 1
     finally:
@@ -51,7 +43,6 @@ def test_fact_insert_and_fts(tmp_path):
         )
         conn.commit()
 
-        # FTS trigger should have indexed it
         row = conn.execute(
             "SELECT subject, object FROM facts_fts WHERE facts_fts MATCH 'flask'"
         ).fetchone()

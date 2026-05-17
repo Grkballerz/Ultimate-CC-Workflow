@@ -15,6 +15,14 @@ with real, accurate data — not placeholders.
 
 ### Pass 1 — Silent stack detection
 
+**Preferred path**: invoke the detection helper via Bash:
+
+```
+$HOME/.claude/ucw/bin/ucw-detect-stack.py "$(pwd)"
+```
+
+It returns structured JSON for every detector below. If the helper is unavailable, fall back to reading manifests directly.
+
 Read these files if they exist (use Glob + Read; don't spam Bash):
 
 | File | What to extract |
@@ -54,12 +62,25 @@ If the user picks Obsidian or Notion, follow up with vault path or API key promp
 
 ## Output
 
-After both passes:
+After both passes, write `.ucw/state/init.json` combining detector output and user answers:
 
-1. Write `.ucw/knowledge/STACK.md`, `CONVENTIONS.md`, `PREFERENCES.md`, `DESIGN.md` (stub), `GLOSSARY.md` (empty), `ROADMAP.md` (stub), `INDEX.md` (summary).
-2. Initialize `.ucw/memory.sqlite` by calling the `ucw-memory` MCP server's `memory.init` tool.
-3. If user opted into Obsidian/Notion: write the MCP config to `~/.claude/mcp.json` (merge, never overwrite).
-4. Print a one-paragraph "here's what I know about your repo" summary for verification.
+```json
+{ "stack": { ...detector output... }, "preferences": { ...answers... }, "init_at": "YYYY-MM-DD" }
+```
+
+Then run the renderer:
+
+```
+$HOME/.claude/ucw/bin/ucw-render-knowledge.py \
+  --state .ucw/state/init.json \
+  --project-root .
+```
+
+That writes all 7 Knowledge files. Finally:
+
+1. Initialize `.ucw/memory.sqlite` by calling `mcp__ucw-memory__memory.init`.
+2. If user opted into Obsidian/Notion: write the MCP config to `~/.claude/mcp.json` (merge, never overwrite).
+3. Print a one-paragraph "here's what I know about your repo" summary for verification.
 
 ## Re-run behavior
 
