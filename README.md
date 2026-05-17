@@ -4,7 +4,8 @@ An opinionated, end-to-end workflow framework for Claude Code that combines the
 best ideas from Superpowers, Everything Claude Code, wshobson/agents,
 claude_memory, and the broader ecosystem into a single coherent system.
 
-> **Status:** scaffold. M1 (skeleton) landed. M2 (Knowledge + Onboarding) in progress.
+> **Status:** working end-to-end. M1–M3 + M6 shipped; 63 tests passing; smoke test exercises the full pipeline.
+> Run `make smoke` to see it lay down a fake repo, render knowledge docs, distill facts, recall them via MCP, and audit — all in ~3s.
 > See [docs/architecture.md](docs/architecture.md) and the build plan for what's next.
 
 ---
@@ -93,12 +94,14 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design.
 | Milestone | Status |
 |---|---|
 | M1 — Skeleton, plugin manifest, installer, CI | ✅ shipped |
-| M2 — Knowledge + Onboarding | 🚧 templates in place; scribe/onboarder agents in progress |
-| M3 — Memory subsystem | ⏳ |
-| M4 — Workflow + gates | ⏳ |
-| M5 — Orchestration + learning | ⏳ |
-| M6 — Observability + audit | ⏳ |
+| M2 — Knowledge + Onboarding (templates, detect-stack, render-knowledge, scribe/onboarder agents) | ✅ shipped |
+| M3 — Memory subsystem (SQLite + FTS5, MCP server, distillation, Claude+Voyage reranking, privacy) | ✅ shipped |
+| M4 — Workflow + gates (phase tracking, inner-loop gates, streak breaker, phase-aware Stop hook) | 🚧 wired; PR-watch loop remains |
+| M5 — Orchestration + learning (instinct promotion, worktree fan-out) | ⏳ |
+| M6 — Observability + audit (CLI dashboard, secret scanner, scribe diff helper, audit-allow suppression) | ✅ shipped |
 | M7 — Marketplace publish | ⏳ |
+
+**Test surface:** 63 unit tests + `make smoke` end-to-end. `make validate` runs everything CI does.
 
 ---
 
