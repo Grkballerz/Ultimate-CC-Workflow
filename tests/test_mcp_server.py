@@ -76,3 +76,39 @@ def test_unknown_tool(sandbox):
 def test_initialize_notification_returns_none(sandbox):
     resp = handle_request({"jsonrpc": "2.0", "method": "notifications/initialized"})
     assert resp is None
+
+
+def test_missing_required_args_returns_clean_error(sandbox):
+    """Schema-validation path: missing required fields → -32602 with field list."""
+    resp = _call("memory.note", {})
+    assert "error" in resp
+    assert resp["error"]["code"] == -32602
+    assert "missing required argument" in resp["error"]["message"]
+    for field in ("subject", "predicate", "object", "reason"):
+        assert field in resp["error"]["message"]
+    # data carries machine-readable details
+    assert resp["error"]["data"]["tool"] == "memory.note"
+    assert set(resp["error"]["data"]["required"]) >= {"subject", "predicate", "object", "reason"}
+
+
+def test_partial_required_args(sandbox):
+    """Only some required fields missing."""
+    resp = _call("memory.note", {"subject": "x", "predicate": "y"})
+    assert resp["error"]["code"] == -32602
+    msg = resp["error"]["message"]
+    assert "object" in msg
+    assert "reason" in msg
+
+
+def test_unknown_method_returns_method_not_found(sandbox):
+    resp = handle_request({"jsonrpc": "2.0", "id": 99, "method": "foo/bar"})
+    assert resp["error"]["code"] == -32601
+
+
+def test_parse_error_invalid_json_via_handle_request_not_applicable():
+    """parse errors are returned by serve_stdio; this confirms handle_request
+    only receives parsed dicts so it never sees raw garbage."""
+    # If someone passes a non-dict, that's a programmer error; we want a stable failure.
+    import pytest
+    with pytest.raises(AttributeError):
+        handle_request("not a dict")  # type: ignore[arg-type]

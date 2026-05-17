@@ -280,8 +280,23 @@ def handle_request(req: dict[str, Any]) -> dict[str, Any] | None:
         handler = TOOL_HANDLERS.get(name)
         if handler is None:
             return _error(req_id, -32601, f"unknown tool: {name}")
+
+        # Validate required fields against the tool's inputSchema.
+        spec = TOOLS.get(name, {})
+        required = spec.get("inputSchema", {}).get("required", []) or []
+        missing = [field for field in required if field not in arguments]
+        if missing:
+            return _error(
+                req_id, -32602,
+                f"missing required argument(s): {', '.join(missing)}",
+                {"tool": name, "required": required, "received": list(arguments.keys())},
+            )
+
         try:
             result = handler(arguments)
+        except ValueError as exc:
+            # ValueError from the handler is a user-facing validation problem.
+            return _error(req_id, -32602, str(exc))
         except Exception as exc:
             return _error(req_id, -32603, f"tool error: {exc}", traceback.format_exc())
         return _respond(req_id, {
