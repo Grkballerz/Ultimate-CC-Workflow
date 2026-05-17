@@ -71,7 +71,8 @@ ensure_dirs() {
 
 backup_settings() {
   if [[ -f "$CLAUDE_SETTINGS" ]]; then
-    local backup="$CLAUDE_SETTINGS.ucw.bak.$(date +%s)"
+    local backup
+    backup="$CLAUDE_SETTINGS.ucw.bak.$(date +%s)"
     run cp "$CLAUDE_SETTINGS" "$backup"
     debug "backed up settings to $backup"
   elif (( ! DRY_RUN )); then
@@ -102,7 +103,8 @@ install_hooks() {
   run mkdir -p "$UCW_HOME/hooks"
   for f in "$REPO_ROOT/hooks/"*.py; do
     [[ -e "$f" ]] || continue
-    local dest="$UCW_HOME/hooks/$(basename "$f")"
+    local dest
+    dest="$UCW_HOME/hooks/$(basename "$f")"
     run ln -sf "$f" "$dest"
   done
   # _hook_common.py shared helper
@@ -183,7 +185,11 @@ verify_install() {
       warn "ucw-memory MCP server not registered"; ok=0;
     }
   fi
-  (( ok )) && log "verify: ✓ install looks healthy" || warn "verify: some checks failed (see above)"
+  if (( ok )); then
+    log "verify: ✓ install looks healthy"
+  else
+    warn "verify: some checks failed (see above)"
+  fi
 }
 
 uninstall() {

@@ -1,45 +1,26 @@
 {
   "name": "ucw",
-  "description": "Ultimate Claude Code Workflow — sub-plugins for à la carte install.",
+  "description": "Ultimate Claude Code Workflow — opinionated synthesis of Knowledge, Memory, 5-phase Workflow, multi-agent Orchestration, instinct Learning, and live Observability.",
   "owner": {
-    "name": "UCW"
+    "name": "UCW",
+    "url": "https://github.com/grkballerz/ultimate-cc-workflow"
   },
   "plugins": [
     {
-      "name": "ucw-core",
-      "source": "./plugins/ucw-core",
-      "description": "Required core: memory MCP, workflow agents, verification gates, base skills, base commands.",
-      "required": true
-    },
-    {
-      "name": "ucw-orchestration",
-      "source": "./plugins/ucw-orchestration",
-      "description": "Multi-agent orchestrators, worktree fan-out, `/ucw watch` PR autopilot."
-    },
-    {
-      "name": "ucw-security",
-      "source": "./plugins/ucw-security",
-      "description": "AgentShield-style scanner, security-reviewer agent, `/audit` command."
-    },
-    {
-      "name": "ucw-lang-typescript",
-      "source": "./plugins/ucw-lang-typescript",
-      "description": "TypeScript expert agent, rules, and idiom skills."
-    },
-    {
-      "name": "ucw-lang-python",
-      "source": "./plugins/ucw-lang-python",
-      "description": "Python expert agent, rules, and idiom skills."
-    },
-    {
-      "name": "ucw-lang-go",
-      "source": "./plugins/ucw-lang-go",
-      "description": "Go expert agent, rules, and idiom skills."
-    },
-    {
-      "name": "ucw-lang-rust",
-      "source": "./plugins/ucw-lang-rust",
-      "description": "Rust expert agent, rules, and idiom skills."
+      "name": "ucw",
+      "source": ".",
+      "description": "All-in-one bundle: 8 agents, 10 slash commands, 9 hooks, 7 Knowledge templates, FTS5+Voyage+Claude memory MCP, security audit, observability dashboard, statusLine. Use `install.sh --profile {minimal|standard|full}` after marketplace install to lay down rules and configure hooks.",
+      "keywords": [
+        "workflow",
+        "memory",
+        "knowledge",
+        "subagents",
+        "skills",
+        "hooks",
+        "orchestration",
+        "observability",
+        "security-audit"
+      ]
     }
   ]
 }

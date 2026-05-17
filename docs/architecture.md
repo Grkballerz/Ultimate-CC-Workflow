@@ -1,8 +1,52 @@
 # UCW Architecture
 
-This document is the durable reference. The build plan is at
-`/root/.claude/plans/if-you-wanted-to-toasty-wilkinson.md`; this file mirrors
-the design portions for in-repo readability.
+This document is the durable reference for UCW's design. For operational
+guidance see [`workflow.md`](workflow.md).
+
+---
+
+## System diagram
+
+```
+                                ┌─────────────────────────────────────────┐
+                                │             Claude Code session          │
+                                │                                          │
+  ┌─ user types ─►  /plan ──────┼──► planner agent ──► .ucw/state/phase   │
+  │                /ship        │     implementer       .ucw/state/plan.md│
+  │                /recall      │     verifier          .ucw/state/streak │
+  │                /audit       │     reviewer                             │
+  │                                  scribe                                │
+  │                                                                        │
+  │   Knowledge ◄──── scribe ◄──── Land ──┐                                │
+  │   .ucw/knowledge/*.md                  │                                │
+  │     INDEX  STACK  DESIGN ...           │                                │
+  │                                        │                                │
+  │   Memory ◄──── distill ◄──── SessionEnd│                                │
+  │   .ucw/memory.sqlite                   │                                │
+  │     facts + FTS5 + embeddings          │                                │
+  │     instincts + sessions               │                                │
+  │                                        │                                │
+  │                                        ▼                                │
+  │   Hooks ──────────────────────► hooks/                                  │
+  │     SessionStart  PreToolUse                                            │
+  │     PostToolUse   PostToolBatch (streak-breaker)                        │
+  │     Stop (phase-aware)  PreCompact                                      │
+  │     SessionEnd (runs distiller)                                         │
+  │                                                                        │
+  │   MCP   ucw-memory  (stdio JSON-RPC, 7 tools)                          │
+  │         obsidian / notion (optional, mirrors Knowledge)                │
+  │                                                                        │
+  │   Bin   ucw-audit         ucw-distill-instincts                        │
+  │         ucw-detect-stack  ucw-knowledge-{check,diff}                   │
+  │         ucw-phase         ucw-render-knowledge                         │
+  │         ucw-worktree                                                   │
+  └─────────────────────────────────────────────────────────────────────────┘
+```
+
+The flow: **session starts** → SessionStart hook injects Knowledge INDEX +
+recalled memory → **work happens** through phases (Scope → Plan → Build →
+Verify → Land), each gated by hooks → **session ends** → SessionEnd hook
+distills facts back into memory → **next session** picks them up.
 
 ---
 
