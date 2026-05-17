@@ -1,29 +1,38 @@
-"""Hybrid retrieval: FTS5 + (optional) vector ANN + RRF + reranking.
+"""Hybrid retrieval: FTS5 + (optional) reranking via Claude or Voyage.
 
-M3 lands FTS5 + recency + pinned-first. Vector and rerank layers are stubs
-that activate when their optional deps are installed and the user has keys.
+Behavior:
+1. **Pinned facts** always included first, sorted by recency.
+2. **FTS5** pulls a pool of up to `fts_pool` BM25 hits.
+3. **Reranker** (if available) scores the FTS pool semantically and re-sorts.
+4. **Recency boost** breaks ties.
+
+The reranker is auto-detected via `rerank.make_reranker()`. If no key is set,
+the pipeline runs FTS-only and reports `embedding_mode = "fts-only"`. The
+literal "embedding model is Claude" path corresponds to
+`embedding_mode = "fts+rerank-claude"`.
 """
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from typing import Callable
 
 from .db import Fact, MemoryDB
+from .rerank import RerankItem, fuse, make_reranker
 
 
 @dataclass(frozen=True)
 class RecallHit:
     fact: Fact
     score: float
-    sources: tuple[str, ...]  # which ranker(s) surfaced this — ("fts",), ("vec",), ("fts","vec")
+    sources: tuple[str, ...]  # ("pinned",) | ("fts",) | ("fts","rerank")
 
 
 @dataclass
 class RecallResult:
     hits: list[RecallHit]
     char_budget: int
-    embedding_mode: str  # "fts-only" | "fts+vec" | "fts+vec+rerank"
+    embedding_mode: str  # "fts-only" | "fts+rerank-claude" | "fts+rerank-voyage"
 
     def as_context(self) -> str:
         """Render hits as a markdown block suitable for SessionStart injection."""
@@ -40,6 +49,10 @@ class RecallResult:
         return "\n".join(lines)
 
 
+# A reranker is a callable taking (query, list[str]) and returning list[float].
+RerankFn = Callable[[str, list[str]], list[float]]
+
+
 def recall(
     db: MemoryDB,
     query: str,
@@ -48,19 +61,13 @@ def recall(
     char_budget: int = 4000,
     scope: str | None = None,
     fts_pool: int = 30,
+    reranker: RerankFn | None = None,
+    rerank_provider: str | None = None,
 ) -> RecallResult:
-    """Retrieve top-k facts for query using whatever rankers are available.
+    """Retrieve top-k facts for query.
 
-    Current behavior (M3 baseline):
-        1. Always include pinned facts (most recent first), within budget.
-        2. BM25 over FTS5 for the remaining slots.
-        3. Recency boost: tie-break by created_at descending.
-
-    Future:
-        - Vector ANN via sqlite-vec when embeddings table is populated.
-        - RRF merging FTS + vector ranks.
-        - Voyage rerank-2 for top-N reordering.
-        - Claude Haiku judge when no Voyage key.
+    `reranker` lets tests inject a mock; production code passes None and we
+    auto-detect via `rerank.make_reranker(rerank_provider)`.
     """
     pinned = db.pinned_facts(scope=scope)
     pinned_hits = [
@@ -69,11 +76,42 @@ def recall(
     ]
 
     fts_hits_raw = db.fts_search(query, limit=fts_pool, scope=scope) if query.strip() else []
-    fts_hits = [
-        RecallHit(fact=f, score=s + _recency_boost(f), sources=("fts",))
-        for f, s in fts_hits_raw
+    fts_facts = [
+        (f, s) for f, s in fts_hits_raw
         if not any(p.fact.id == f.id for p in pinned_hits)
     ]
+
+    # Decide whether to rerank.
+    embedding_mode = "fts-only"
+    rerank_fn = reranker
+    if rerank_fn is None and fts_facts:
+        r = make_reranker(rerank_provider)
+        if r is not None:
+            rerank_fn = r.rerank
+            embedding_mode = f"fts+rerank-{r.__class__.__name__.replace('Reranker', '').lower()}"
+
+    if rerank_fn is not None and fts_facts:
+        items = [f.as_text() for f, _ in fts_facts]
+        fts_norm = _normalize([s for _, s in fts_facts])
+        try:
+            rerank_scores = rerank_fn(query, items)
+            fused = fuse(fts_norm, rerank_scores)
+            fts_hits = [
+                RecallHit(fact=f, score=score + _recency_boost(f), sources=("fts", "rerank"))
+                for (f, _), score in zip(fts_facts, fused)
+            ]
+        except Exception:
+            # Any reranker error: silently fall back to FTS-only scoring.
+            fts_hits = [
+                RecallHit(fact=f, score=s + _recency_boost(f), sources=("fts",))
+                for f, s in fts_facts
+            ]
+            embedding_mode = "fts-only"
+    else:
+        fts_hits = [
+            RecallHit(fact=f, score=s + _recency_boost(f), sources=("fts",))
+            for f, s in fts_facts
+        ]
 
     merged = pinned_hits + fts_hits
     merged.sort(key=lambda h: h.score, reverse=True)
@@ -81,8 +119,18 @@ def recall(
     return RecallResult(
         hits=merged[:k],
         char_budget=char_budget,
-        embedding_mode="fts-only",
+        embedding_mode=embedding_mode,
     )
+
+
+def _normalize(scores: list[float]) -> list[float]:
+    """Min-max normalize to [0, 1]. Degenerate cases return all 0.5."""
+    if not scores:
+        return []
+    lo, hi = min(scores), max(scores)
+    if hi <= lo:
+        return [0.5] * len(scores)
+    return [(s - lo) / (hi - lo) for s in scores]
 
 
 def _age_seconds(fact: Fact, now: int | None = None) -> int:
@@ -94,3 +142,7 @@ def _recency_boost(fact: Fact, *, half_life_days: float = 14.0) -> float:
     """Exponential decay boost in [0, 1]. Half-life 2 weeks by default."""
     age_days = _age_seconds(fact) / 86400.0
     return 0.5 ** (age_days / half_life_days)
+
+
+# Make pathlib.Path importable for tests that monkey-patch.
+from pathlib import Path  # noqa: E402,F401
