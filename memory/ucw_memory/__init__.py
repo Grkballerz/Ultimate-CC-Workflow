@@ -6,8 +6,11 @@ from .privacy import strip_private
 from .retrieval import recall
 
 __all__ = [
-    "MemoryDB", "init_db", "recall",
-    "extract_from_transcript", "write_candidates_to_db",
+    "MemoryDB",
+    "extract_from_transcript",
+    "init_db",
+    "recall",
     "strip_private",
+    "write_candidates_to_db",
 ]
 __version__ = "0.1.0"

@@ -6,11 +6,8 @@ sandbox the DB by setting cwd to a tmp dir that already has a `.ucw/` skeleton.
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
 import pytest
-
 from ucw_memory.server import handle_request
 
 

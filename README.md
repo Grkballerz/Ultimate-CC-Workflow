@@ -95,13 +95,14 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design.
 |---|---|
 | M1 — Skeleton, plugin manifest, installer, CI | ✅ shipped |
 | M2 — Knowledge + Onboarding (templates, detect-stack, render-knowledge, scribe/onboarder agents) | ✅ shipped |
-| M3 — Memory subsystem (SQLite + FTS5, MCP server, distillation, Claude+Voyage reranking, privacy) | ✅ shipped |
-| M4 — Workflow + gates (phase tracking, inner-loop gates, streak breaker, phase-aware Stop hook) | 🚧 wired; PR-watch loop remains |
-| M5 — Orchestration + learning (instinct promotion, worktree fan-out) | ⏳ |
-| M6 — Observability + audit (CLI dashboard, secret scanner, scribe diff helper, audit-allow suppression) | ✅ shipped |
+| M3 — Memory subsystem (SQLite + FTS5, MCP server, distillation, Claude + Voyage reranking, privacy) | ✅ shipped |
+| M4 — Workflow + gates (phase tracking, inner-loop gates, streak breaker, phase-aware Stop, PR-watch via /ucw watch) | ✅ shipped |
+| M5 — Orchestration + learning (instinct promotion → Skill drafts, worktree fan-out helper) | ✅ shipped |
+| M6 — Observability + audit (color CLI dashboard, secret scanner, scribe diff helper, stale-doc checker, statusLine) | ✅ shipped |
 | M7 — Marketplace publish | ⏳ |
 
-**Test surface:** 63 unit tests + `make smoke` end-to-end. `make validate` runs everything CI does.
+**Test surface:** 136 unit tests + end-to-end smoke + CI gates (ruff + shellcheck + JSON-validate + audit + pytest + smoke).
+Run `make validate` for the full local sweep. Run `make smoke` to see it lay down a fake repo, render knowledge, distill, recall, and audit — all in ~3s.
 
 ---
 

@@ -5,12 +5,9 @@ VOYAGE_API_KEY.
 """
 from __future__ import annotations
 
-import pytest
-
 from ucw_memory.db import MemoryDB
-from ucw_memory.rerank import RerankItem, fuse, reorder, make_reranker
+from ucw_memory.rerank import RerankItem, fuse, make_reranker, reorder
 from ucw_memory.retrieval import recall
-
 
 # ---- Pure helpers ------------------------------------------------------------
 

@@ -40,7 +40,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = REPO_ROOT / "knowledge"
 
@@ -119,19 +118,21 @@ def build_substitutions(state: dict[str, Any]) -> dict[str, str]:
         "external_boundaries":"_to be filled in_",
         "cross_cutting":      "_to be filled in_",
 
-        # PREFERENCES (one row per key)
+        # PREFERENCES (one row per key — `deploy_target` is intentionally shared
+        # with the STACK section above; STACK.md uses {{deploy_target}}, and
+        # PREFERENCES.md also uses {{deploy_target}}, so the merge logic lives
+        # there. `database` is a distinct key from STACK's `datastores`.)
         "image_gen_tool":      pref("image_gen_tool"),
         "video_gen_tool":      pref("video_gen_tool"),
         "svg_tool":            pref("svg_tool"),
         "audio_tool":          pref("audio_tool"),
         "diagram_tool":        pref("diagram_tool"),
         "database":            pref("database", _list_or_blank(datastores)),
-        "deploy_target":       pref("deploy_target", _list_or_blank(deploy_targets)),
         "browser_automation":  pref("browser_automation"),
         "docs_surface":        pref("docs_surface", "Plain `.ucw/knowledge/`"),
         "embedding_provider":  pref("embedding_provider", "Claude Haiku reranking (no Voyage key)"),
         "scribe_mode":         pref("scribe_mode", "auto"),
-        "notification_channel":pref("notification_channel", "desktop only"),
+        "notification_channel": pref("notification_channel", "desktop only"),
         "runtime":             pref("runtime", _list_or_blank(runtimes)),
         "test_runner":         pref("test_runner", _list_or_blank(test_runners)),
         "formatter":           pref("formatter", _list_or_blank(formatters)),

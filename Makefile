@@ -9,7 +9,8 @@ help:
 	@echo "  make test        # run pytest"
 	@echo "  make smoke       # run the end-to-end demo (scripts/smoke.sh)"
 	@echo "  make audit       # security audit of this repo"
-	@echo "  make lint        # shellcheck install.sh + JSON manifest validation"
+	@echo "  make lint        # ruff + shellcheck + JSON manifest validation"
+	@echo "  make format      # ruff check --fix + ruff format"
 	@echo "  make validate    # everything CI runs"
 	@echo "  make clean       # remove __pycache__ etc."
 	@echo "  make install-dev # editable install of the memory package"
@@ -28,11 +29,16 @@ audit:
 	$(PYTHON) bin/ucw-audit.py --repo .
 
 lint:
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck install.sh scripts/smoke.sh; \
+	@if command -v ruff >/dev/null 2>&1; then ruff check .; else echo "(ruff not installed — skipping)"; fi
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck install.sh scripts/smoke.sh dashboard/statusline.sh; \
 	  else echo "(shellcheck not installed — skipping)"; fi
 	@for f in .claude-plugin/*.json settings/*.json mcp/ucw-memory.json mcp/obsidian.json.example mcp/notion.json.example; do \
 	  $(PYTHON) -c "import json; json.load(open('$$f'))" && echo "ok $$f"; \
 	done
+
+format:
+	@if command -v ruff >/dev/null 2>&1; then ruff check --fix . && ruff format .; \
+	  else echo "ruff not installed — pip install ruff first"; fi
 
 validate: test lint audit
 	@echo "✓ all green"

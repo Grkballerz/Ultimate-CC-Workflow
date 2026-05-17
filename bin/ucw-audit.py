@@ -27,9 +27,9 @@ import json
 import os
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 # ---- patterns ---------------------------------------------------------------
 
@@ -241,27 +241,73 @@ def audit(targets: list[Path]) -> list[Finding]:
     return findings
 
 
-def format_text(findings: list[Finding]) -> str:
+_ANSI = {
+    "critical": "\033[1;31m",  # bold red
+    "major":    "\033[31m",    # red
+    "minor":    "\033[33m",    # yellow
+    "nit":      "\033[2m",     # dim
+    "reset":    "\033[0m",
+    "ok":       "\033[32m",
+}
+
+
+def format_text(findings: list[Finding], *, color: bool = False) -> str:
+    paint = (lambda t, c: f"{_ANSI[c]}{t}{_ANSI['reset']}") if color else (lambda t, _: t)
+
     if not findings:
-        return "AUDIT: clean ✓ (0 findings)"
-    buckets = {"critical": [], "major": [], "minor": [], "nit": []}
+        return paint("AUDIT: clean ✓ (0 findings)", "ok")
+
+    buckets: dict[str, list[Finding]] = {"critical": [], "major": [], "minor": [], "nit": []}
     for f in findings:
         buckets.setdefault(f.severity, []).append(f)
+
     lines = ["AUDIT REPORT", "─" * 60]
     for sev in ("critical", "major", "minor", "nit"):
         items = buckets.get(sev, [])
-        lines.append(f"  {sev:<10} {len(items)}")
+        line = f"  {sev:<10} {len(items)}"
+        if items:
+            line = paint(line, sev)
+        lines.append(line)
     lines.append("")
     for sev in ("critical", "major", "minor", "nit"):
         for f in buckets.get(sev, []):
-            lines.append(f"[{f.severity}] {f.file}:{f.line} — {f.rule}: {f.message}")
+            tag = paint(f"[{f.severity}]", sev)
+            lines.append(f"{tag} {f.file}:{f.line} — {f.rule}: {f.message}")
     return "\n".join(lines)
 
 
+def format_markdown(findings: list[Finding]) -> str:
+    """Markdown report for PR comments / docs embedding."""
+    if not findings:
+        return "**AUDIT:** clean ✓ (0 findings)"
+    buckets: dict[str, list[Finding]] = {"critical": [], "major": [], "minor": [], "nit": []}
+    for f in findings:
+        buckets.setdefault(f.severity, []).append(f)
+    out = ["## Audit Report", "", "| Severity | Count |", "| --- | ---: |"]
+    for sev in ("critical", "major", "minor", "nit"):
+        out.append(f"| {sev} | {len(buckets.get(sev, []))} |")
+    out.append("")
+    for sev in ("critical", "major", "minor", "nit"):
+        items = buckets.get(sev, [])
+        if not items:
+            continue
+        out.append(f"### {sev.title()}")
+        for f in items:
+            out.append(f"- `{f.file}:{f.line}` — **{f.rule}** — {f.message}")
+        out.append("")
+    return "\n".join(out)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="ucw-audit")
+    parser = argparse.ArgumentParser(
+        prog="ucw-audit",
+        description="Deterministic security audit of a UCW install. "
+                    "Exit 0 = clean, 2 = critical, 3 = major.",
+    )
     parser.add_argument("--target", action="append", help="extra path to audit (repeatable)")
-    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    parser.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    parser.add_argument("--markdown", action="store_true", help="markdown output (for PR comments)")
+    parser.add_argument("--no-color", action="store_true", help="disable ANSI color")
     parser.add_argument("--repo", default=os.getcwd(), help="UCW repo root (default: cwd)")
     args = parser.parse_args(argv)
 
@@ -274,8 +320,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.json:
         print(json.dumps([f.as_dict() for f in findings], indent=2))
+    elif args.markdown:
+        print(format_markdown(findings))
     else:
-        print(format_text(findings))
+        color = sys.stdout.isatty() and not args.no_color
+        print(format_text(findings, color=color))
 
     if any(f.severity == "critical" for f in findings):
         return 2

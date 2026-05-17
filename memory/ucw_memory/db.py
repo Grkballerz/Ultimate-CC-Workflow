@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 SCHEMA_PATH = PACKAGE_ROOT.parent / "schema.sql"
@@ -38,6 +38,7 @@ class Fact:
     object: str
     reason: str
     contextual_prefix: str | None
+    source_session: str | None
     confidence: float
     created_at: int
     ttl_seconds: int | None
@@ -162,6 +163,7 @@ class MemoryDB:
         if scope:
             params.append(scope)
         params.append(limit)
+        # scope_clause is hard-coded above; user input never reaches the SQL string.
         rows = self.conn.execute(
             f"""SELECT f.*, fts.rank AS rank
                   FROM facts_fts fts
@@ -170,7 +172,7 @@ class MemoryDB:
                    AND f.deleted = 0
                    {scope_clause}
                  ORDER BY fts.rank
-                 LIMIT ?""",
+                 LIMIT ?""",  # noqa: S608 — scope_clause is hardcoded, params are bound
             params,
         ).fetchall()
         return [(_row_to_fact(r), -float(r["rank"])) for r in rows]
@@ -179,8 +181,9 @@ class MemoryDB:
         scope_clause = "WHERE deleted = 0 AND scope = ?" if scope else "WHERE deleted = 0"
         params: list = [scope] if scope else []
         params.extend([limit, offset])
+        # scope_clause is hard-coded above; user input never reaches the SQL string.
         rows = self.conn.execute(
-            f"SELECT * FROM facts {scope_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM facts {scope_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",  # noqa: S608
             params,
         ).fetchall()
         return [_row_to_fact(r) for r in rows]
@@ -207,6 +210,7 @@ def _row_to_fact(row: sqlite3.Row) -> Fact:
         object=row["object"],
         reason=row["reason"],
         contextual_prefix=row["contextual_prefix"],
+        source_session=row["source_session"] if "source_session" in row.keys() else None,
         confidence=row["confidence"],
         created_at=row["created_at"],
         ttl_seconds=row["ttl_seconds"],

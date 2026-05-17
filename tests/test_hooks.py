@@ -72,7 +72,7 @@ def test_pre_tool_use_allows_safe_bash(project):
 
 
 def test_pre_tool_use_blocks_force_push_to_main(project):
-    rc, out, _ = _run("pre-tool-use.py", {
+    _rc, out, _ = _run("pre-tool-use.py", {
         "cwd": str(project),
         "tool_input": {"command": "git push --force origin main"},
     })
@@ -96,7 +96,7 @@ def test_post_tool_use_increments_streak(project):
 def test_post_tool_use_catches_python_syntax_error(project):
     target = project / "bad.py"
     target.write_text("def broken(:\n")  # syntax error
-    rc, out, _ = _run("post-tool-use.py", {
+    _rc, out, _ = _run("post-tool-use.py", {
         "cwd": str(project),
         "tool_input": {"file_path": str(target)},
     })
@@ -109,7 +109,7 @@ def test_post_tool_use_catches_python_syntax_error(project):
 
 def test_post_tool_batch_streak_breaker(project):
     (project / ".ucw" / "state" / "edit-streak").write_text("6")
-    rc, out, _ = _run("post-tool-batch.py", {
+    _rc, out, _ = _run("post-tool-batch.py", {
         "cwd": str(project),
         "tools": [],
     })
@@ -132,7 +132,7 @@ def test_user_prompt_submit_injects_stack_doc(project):
     knowledge = project / ".ucw" / "knowledge"
     knowledge.mkdir()
     (knowledge / "STACK.md").write_text("# Stack\n- python 3.12\n- flask\n")
-    rc, out, _ = _run("user-prompt-submit.py", {
+    _rc, out, _ = _run("user-prompt-submit.py", {
         "cwd": str(project),
         "prompt": "What version of flask are we on? Check the package install.",
     })
@@ -145,7 +145,7 @@ def test_user_prompt_submit_no_match_no_output(project):
     knowledge = project / ".ucw" / "knowledge"
     knowledge.mkdir()
     (knowledge / "STACK.md").write_text("# Stack\n")
-    rc, out, _ = _run("user-prompt-submit.py", {
+    _rc, out, _ = _run("user-prompt-submit.py", {
         "cwd": str(project),
         "prompt": "Hello there.",
     })

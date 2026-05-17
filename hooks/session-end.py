@@ -8,20 +8,23 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, read_payload, state_file, ucw_dir  # noqa: E402
+from _hook_common import log, read_payload, state_file, ucw_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "memory"))
 sys.path.insert(0, str(Path.home() / ".claude" / "ucw" / "lib"))  # alt install location
 
 try:
-    from ucw_memory import MemoryDB, extract_from_transcript, write_candidates_to_db  # type: ignore[import-not-found]
+    from ucw_memory import (  # type: ignore[import-not-found]
+        MemoryDB,
+        extract_from_transcript,
+        write_candidates_to_db,
+    )
 except ImportError:
     MemoryDB = None  # type: ignore[assignment,misc]
 

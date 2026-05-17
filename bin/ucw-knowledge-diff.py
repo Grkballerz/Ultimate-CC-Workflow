@@ -24,7 +24,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 STACK_TRIGGERS = {
     "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
     "pyproject.toml", "uv.lock", "poetry.lock", "Pipfile.lock", "requirements.txt",

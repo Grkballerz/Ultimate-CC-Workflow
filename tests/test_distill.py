@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from ucw_memory.db import MemoryDB
 from ucw_memory.distill import (

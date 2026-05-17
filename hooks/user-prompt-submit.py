@@ -16,8 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, project_root, read_payload, write_output  # noqa: E402
-
+from _hook_common import log, project_root, read_payload, write_output
 
 KEYWORD_TO_DOC: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\b(stack|dependenc|version|install|package|library|framework)\b", re.I),         "STACK.md"),

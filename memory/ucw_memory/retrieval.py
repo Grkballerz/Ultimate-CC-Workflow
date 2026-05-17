@@ -14,11 +14,11 @@ literal "embedding model is Claude" path corresponds to
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from .db import Fact, MemoryDB
-from .rerank import RerankItem, fuse, make_reranker
+from .rerank import fuse, make_reranker
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ def recall(
             fused = fuse(fts_norm, rerank_scores)
             fts_hits = [
                 RecallHit(fact=f, score=score + _recency_boost(f), sources=("fts", "rerank"))
-                for (f, _), score in zip(fts_facts, fused)
+                for (f, _), score in zip(fts_facts, fused, strict=True)
             ]
         except Exception:
             # Any reranker error: silently fall back to FTS-only scoring.

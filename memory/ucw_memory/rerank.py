@@ -176,12 +176,12 @@ def fuse(fts_scores: list[float], rerank_scores: list[float], *, alpha: float = 
     semantic relevance usually beats lexical match once we have both.
     """
     assert len(fts_scores) == len(rerank_scores), "score arrays must align"
-    return [alpha * f + (1 - alpha) * r for f, r in zip(fts_scores, rerank_scores)]
+    return [alpha * f + (1 - alpha) * r for f, r in zip(fts_scores, rerank_scores, strict=True)]
 
 
 def reorder(items: list[RerankItem], scores: list[float]) -> list[RerankItem]:
     """Return items sorted by score descending. Stable for ties."""
-    paired = list(zip(items, scores))
+    paired = list(zip(items, scores, strict=True))
     paired.sort(key=lambda p: p[1], reverse=True)
     return [
         RerankItem(text=it.text, score=s, payload=it.payload)

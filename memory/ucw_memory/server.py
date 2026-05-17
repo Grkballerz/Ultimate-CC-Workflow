@@ -20,8 +20,9 @@ import json
 import os
 import sys
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .db import MemoryDB, init_db
 from .retrieval import recall

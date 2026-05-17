@@ -31,7 +31,6 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-
 # ---- helpers -----------------------------------------------------------------
 
 def _read_text(path: Path) -> str | None:
@@ -213,7 +212,7 @@ def detect_python(root: Path, state: dict[str, Any]) -> None:
 
 def _normalize_dep(dep: str) -> str:
     # Strip version specifiers and extras: "foo[bar]>=1.0" -> "foo"
-    return re.split(r"[\[<>=!~ ]", dep, 1)[0].strip().lower()
+    return re.split(r"[\[<>=!~ ]", dep, maxsplit=1)[0].strip().lower()
 
 
 def detect_go(root: Path, state: dict[str, Any]) -> None:

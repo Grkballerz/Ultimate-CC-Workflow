@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 # UCW installer — idempotent, reversible.
-# Usage: ./install.sh --profile {minimal|standard|full} [--post-marketplace] [--uninstall]
+#
+# Usage:
+#   ./install.sh --profile {minimal|standard|full} [--dry-run] [--verbose]
+#   ./install.sh --post-marketplace [--profile standard]
+#   ./install.sh --uninstall
+#
+# Profiles:
+#   minimal   memory MCP + core rules. No hooks, no gates.
+#   standard  + planner/implementer/reviewer agents, verification gates, inner-loop hooks.
+#   full      + security-reviewer, all language packs, dashboard, PR-watch.
+#
+# Idempotent: re-running is safe. Settings are merged into ~/.claude/settings.json
+# via jq; existing keys are preserved. Hooks are symlinked, not copied, so a
+# `git pull` in this repo updates the installed hooks automatically.
 set -euo pipefail
 
 UCW_HOME="${UCW_HOME:-$HOME/.claude/ucw}"
@@ -11,34 +24,38 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROFILE=""
 POST_MARKETPLACE=0
 UNINSTALL=0
+DRY_RUN=0
+VERBOSE=0
 
-log()  { printf '[ucw] %s\n' "$*"; }
-warn() { printf '[ucw] WARN: %s\n' "$*" >&2; }
-die()  { printf '[ucw] ERR:  %s\n' "$*" >&2; exit 1; }
+log()   { printf '[ucw] %s\n' "$*"; }
+debug() { (( VERBOSE )) && printf '[ucw] · %s\n' "$*" >&2 || true; }
+warn()  { printf '[ucw] WARN: %s\n' "$*" >&2; }
+die()   { printf '[ucw] ERR:  %s\n' "$*" >&2; exit 1; }
 
-usage() {
-  cat <<EOF
-UCW installer.
-
-  ./install.sh --profile {minimal|standard|full}
-  ./install.sh --post-marketplace            # lay down rules+hooks after /plugin install
-  ./install.sh --uninstall                   # remove UCW from ~/.claude
-
-Profiles:
-  minimal   memory MCP + core rules. No hooks, no gates.
-  standard  + planner/implementer/reviewer agents, verification gates, inner-loop hooks.
-  full      + security-reviewer, all language packs, dashboard, PR-watch.
-EOF
+run() {
+  if (( DRY_RUN )); then
+    printf '[ucw] [DRY] %s\n' "$*"
+  else
+    debug "$*"
+    "$@"
+  fi
 }
 
-# ---- arg parsing ----
+usage() {
+  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+# ---- arg parsing ------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --profile) PROFILE="${2:-}"; shift 2 ;;
+    --profile)          PROFILE="${2:-}"; shift 2 ;;
     --post-marketplace) POST_MARKETPLACE=1; shift ;;
-    --uninstall) UNINSTALL=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) die "unknown arg: $1" ;;
+    --uninstall)        UNINSTALL=1; shift ;;
+    --dry-run)          DRY_RUN=1; shift ;;
+    --verbose|-v)       VERBOSE=1; shift ;;
+    -h|--help)          usage 0 ;;
+    *)                  die "unknown arg: $1" ;;
   esac
 done
 
@@ -49,13 +66,15 @@ require() {
 require jq
 
 ensure_dirs() {
-  mkdir -p "$UCW_HOME" "$CLAUDE_HOME"
+  run mkdir -p "$UCW_HOME" "$CLAUDE_HOME" "$UCW_HOME/lib"
 }
 
 backup_settings() {
   if [[ -f "$CLAUDE_SETTINGS" ]]; then
-    cp "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS.ucw.bak.$(date +%s)"
-  else
+    local backup="$CLAUDE_SETTINGS.ucw.bak.$(date +%s)"
+    run cp "$CLAUDE_SETTINGS" "$backup"
+    debug "backed up settings to $backup"
+  elif (( ! DRY_RUN )); then
     echo '{}' > "$CLAUDE_SETTINGS"
   fi
 }
@@ -63,6 +82,10 @@ backup_settings() {
 merge_settings() {
   local fragment="$1"
   [[ -f "$fragment" ]] || die "settings fragment not found: $fragment"
+  if (( DRY_RUN )); then
+    log "[DRY] would merge $fragment into $CLAUDE_SETTINGS"
+    return
+  fi
   local tmp
   tmp="$(mktemp)"
   jq -s '.[0] * .[1]' "$CLAUDE_SETTINGS" "$fragment" > "$tmp"
@@ -70,27 +93,44 @@ merge_settings() {
 }
 
 install_rules() {
-  mkdir -p "$CLAUDE_HOME/rules/ucw"
-  cp -r "$REPO_ROOT/rules/." "$CLAUDE_HOME/rules/ucw/"
-  log "installed rules to $CLAUDE_HOME/rules/ucw"
+  run mkdir -p "$CLAUDE_HOME/rules/ucw"
+  run cp -r "$REPO_ROOT/rules/." "$CLAUDE_HOME/rules/ucw/"
+  log "installed rules → $CLAUDE_HOME/rules/ucw"
 }
 
 install_hooks() {
-  mkdir -p "$UCW_HOME/hooks"
-  cp -r "$REPO_ROOT/hooks/." "$UCW_HOME/hooks/"
-  chmod +x "$UCW_HOME/hooks"/*.py 2>/dev/null || true
-  log "installed hooks to $UCW_HOME/hooks"
+  run mkdir -p "$UCW_HOME/hooks"
+  for f in "$REPO_ROOT/hooks/"*.py; do
+    [[ -e "$f" ]] || continue
+    local dest="$UCW_HOME/hooks/$(basename "$f")"
+    run ln -sf "$f" "$dest"
+  done
+  # _hook_common.py shared helper
+  run ln -sf "$REPO_ROOT/hooks/_hook_common.py" "$UCW_HOME/hooks/_hook_common.py"
+  log "linked hooks → $UCW_HOME/hooks (symlinks → repo, so git pull updates them)"
 }
 
 install_bin() {
-  mkdir -p "$UCW_HOME/bin"
-  cp -r "$REPO_ROOT/bin/." "$UCW_HOME/bin/"
-  chmod +x "$UCW_HOME/bin"/*.py 2>/dev/null || true
-  log "installed bin helpers to $UCW_HOME/bin (add to PATH: export PATH=\"\$HOME/.claude/ucw/bin:\$PATH\")"
+  run mkdir -p "$UCW_HOME/bin"
+  for f in "$REPO_ROOT/bin/"*.py "$REPO_ROOT/dashboard/statusline.sh"; do
+    [[ -e "$f" ]] || continue
+    local base
+    base="$(basename "$f")"
+    run ln -sf "$f" "$UCW_HOME/bin/$base"
+  done
+  # dashboard CLI lives at lib/ since it's package-style
+  run ln -sf "$REPO_ROOT/dashboard" "$UCW_HOME/lib/dashboard"
+  log "linked bin helpers → $UCW_HOME/bin"
+  if ! echo ":$PATH:" | grep -q ":$UCW_HOME/bin:"; then
+    log "tip: add to your shell: export PATH=\"\$HOME/.claude/ucw/bin:\$PATH\""
+  fi
 }
 
 install_memory_deps() {
-  # The FTS5 path is stdlib-only. The package itself just needs to be importable.
+  if (( DRY_RUN )); then
+    log "[DRY] would pip install -e $REPO_ROOT/memory"
+    return
+  fi
   if command -v uv >/dev/null 2>&1; then
     log "installing ucw-memory via uv pip install -e ./memory"
     (cd "$REPO_ROOT/memory" && uv pip install --quiet -e . 2>/dev/null) || \
@@ -108,6 +148,10 @@ install_memory_deps() {
 
 register_mcp() {
   local mcp_config="$CLAUDE_HOME/mcp.json"
+  if (( DRY_RUN )); then
+    log "[DRY] would register ucw-memory in $mcp_config"
+    return
+  fi
   [[ -f "$mcp_config" ]] || echo '{"mcpServers":{}}' > "$mcp_config"
   local tmp
   tmp="$(mktemp)"
@@ -115,7 +159,7 @@ register_mcp() {
      '.mcpServers["ucw-memory"] = $server.ucwMemory' \
      "$mcp_config" > "$tmp"
   mv "$tmp" "$mcp_config"
-  log "registered ucw-memory MCP server"
+  log "registered ucw-memory MCP server in $mcp_config"
 }
 
 apply_profile() {
@@ -126,38 +170,67 @@ apply_profile() {
   log "applied $profile profile to $CLAUDE_SETTINGS"
 }
 
+verify_install() {
+  if (( DRY_RUN )); then
+    return
+  fi
+  local ok=1
+  [[ -d "$CLAUDE_HOME/rules/ucw" ]] || { warn "rules dir missing"; ok=0; }
+  [[ -L "$UCW_HOME/bin/ucw-audit.py" ]] || { warn "audit helper not linked"; ok=0; }
+  command -v jq >/dev/null 2>&1 || { warn "jq missing — settings merges will fail"; ok=0; }
+  if [[ -f "$CLAUDE_HOME/mcp.json" ]]; then
+    jq -e '.mcpServers["ucw-memory"]' "$CLAUDE_HOME/mcp.json" >/dev/null 2>&1 || {
+      warn "ucw-memory MCP server not registered"; ok=0;
+    }
+  fi
+  (( ok )) && log "verify: ✓ install looks healthy" || warn "verify: some checks failed (see above)"
+}
+
 uninstall() {
   log "removing UCW from $CLAUDE_HOME"
-  rm -rf "$CLAUDE_HOME/rules/ucw" "$UCW_HOME/hooks"
+  run rm -rf "$CLAUDE_HOME/rules/ucw" "$UCW_HOME/hooks" "$UCW_HOME/bin" "$UCW_HOME/lib"
   # Strip ucw entries from settings.json
-  if [[ -f "$CLAUDE_SETTINGS" ]]; then
+  if [[ -f "$CLAUDE_SETTINGS" && $DRY_RUN -eq 0 ]]; then
     local tmp
     tmp="$(mktemp)"
-    jq 'del(.hooks?.SessionStart?[]?|select(.hooks[]?.command|test("ucw"))) | del(.. | objects | select(.command? and (.command | test("ucw"))))' \
-      "$CLAUDE_SETTINGS" > "$tmp" 2>/dev/null || cp "$CLAUDE_SETTINGS" "$tmp"
+    jq '
+      walk(
+        if type == "object" and has("command") and (.command | tostring | test("ucw"))
+        then empty else . end
+      )
+    ' "$CLAUDE_SETTINGS" > "$tmp" 2>/dev/null || cp "$CLAUDE_SETTINGS" "$tmp"
     mv "$tmp" "$CLAUDE_SETTINGS"
+  fi
+  # Strip ucw-memory MCP entry
+  if [[ -f "$CLAUDE_HOME/mcp.json" && $DRY_RUN -eq 0 ]]; then
+    local tmp
+    tmp="$(mktemp)"
+    jq 'del(.mcpServers["ucw-memory"])' "$CLAUDE_HOME/mcp.json" > "$tmp" 2>/dev/null \
+      || cp "$CLAUDE_HOME/mcp.json" "$tmp"
+    mv "$tmp" "$CLAUDE_HOME/mcp.json"
   fi
   log "done. memory db at $UCW_HOME left intact — rm -rf $UCW_HOME to fully purge."
 }
 
-# ---- main ----
-if [[ $UNINSTALL -eq 1 ]]; then
+# ---- main -------------------------------------------------------------------
+if (( UNINSTALL )); then
   uninstall
   exit 0
 fi
 
 if [[ -z "$PROFILE" && $POST_MARKETPLACE -eq 0 ]]; then
-  usage
-  exit 1
+  usage 1
 fi
 
 ensure_dirs
 backup_settings
 
-if [[ $POST_MARKETPLACE -eq 1 ]]; then
+if (( POST_MARKETPLACE )); then
   install_rules
   install_hooks
+  install_bin
   apply_profile "${PROFILE:-standard}"
+  verify_install
   log "post-marketplace setup complete."
   exit 0
 fi
@@ -170,10 +243,10 @@ case "$PROFILE" in
     install_memory_deps
     register_mcp
     apply_profile "$PROFILE"
+    verify_install
     log "UCW $PROFILE profile installed. Start Claude Code and run /ucw init."
     ;;
   *)
-    usage
-    exit 1
+    usage 1
     ;;
 esac

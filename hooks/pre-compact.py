@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, read_payload, state_file  # noqa: E402
+from _hook_common import log, read_payload, state_file
 
 
 def main() -> int:
