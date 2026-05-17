@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 from .db import MemoryDB, init_db
+from .distill import extract_from_transcript, write_candidates_to_db
 from .retrieval import recall
 
 
@@ -106,6 +107,22 @@ def cmd_stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_distill(args: argparse.Namespace) -> int:
+    transcript = Path(args.transcript)
+    candidates = extract_from_transcript(transcript)
+    if args.dry_run:
+        print(json.dumps([c.as_dict() for c in candidates], indent=2))
+        return 0
+    with MemoryDB(_default_db(args.scope)) as db:
+        ids = write_candidates_to_db(candidates, db, scope=args.scope, source_session=args.session_id)
+    print(json.dumps({
+        "candidates": len(candidates),
+        "written": len(ids),
+        "fact_ids": ids,
+    }, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ucw-memory")
     parser.add_argument("--scope", default="project", choices=["project", "global"])
@@ -146,6 +163,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_stats = sub.add_parser("stats")
     p_stats.set_defaults(func=cmd_stats)
+
+    p_distill = sub.add_parser("distill", help="extract facts from a session transcript")
+    p_distill.add_argument("transcript", help="path to JSONL transcript")
+    p_distill.add_argument("--session-id", help="tag facts with this session id")
+    p_distill.add_argument("--dry-run", action="store_true", help="print candidates without writing")
+    p_distill.set_defaults(func=cmd_distill)
 
     args = parser.parse_args(argv)
     return args.func(args)

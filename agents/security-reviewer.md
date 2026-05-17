@@ -49,7 +49,7 @@ Exit code 2 on any critical finding (CI gate).
 
 ```
 ATTACKER
-  - hooks/post-tool-use.py:42 — runs `bash -c $cmd` where $cmd comes from tool_input.command. Injection.
+  - hooks/post-tool-use.py:42 — runs `bash -c $cmd` where $cmd comes from tool_input.command. Injection. <!-- audit-allow: bash_c_var (illustrative example) -->
   - mcp/ucw-memory.json — exposes memory.forget. Tools without confirmation can wipe history.
 
 DEFENDER

@@ -3,12 +3,18 @@ description: Security audit of UCW's own configuration — settings, hooks, MCP 
 argument-hint: "[--opus]"
 ---
 
-Invoke the **security-reviewer** subagent with scope:
+Two passes:
 
-- `~/.claude/settings.json`
-- `~/.claude/ucw/hooks/*`
-- `~/.claude/mcp.json`
-- `~/.claude/rules/ucw/*`
-- All agent and skill files in this repo
+1. **Fast deterministic scan** via Bash:
+   ```
+   $HOME/.claude/ucw/bin/ucw-audit.py --repo "$(pwd)" --json
+   ```
+   This catches: secret patterns (14 families), shell injection patterns,
+   MCP servers that exec a shell, reviewer agents with write tools.
 
-Report critical / major / minor / false-alarm counts. Exit non-zero on any critical for CI use.
+2. **Adversarial review** via the **security-reviewer** subagent — invoke it
+   with scope: settings, hooks, MCP configs, agents/skills under this repo.
+
+Report critical / major / minor / false-alarm counts. Exit non-zero on any
+critical finding for CI use. The deterministic scan supports `audit-allow:
+<rule>` suppression comments for illustrative examples.
