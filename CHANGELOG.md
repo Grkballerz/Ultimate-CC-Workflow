@@ -5,8 +5,34 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
-### Added
-- Polish pass: every CLI has `--help`, structured JSON output, meaningful exit codes
+### Added — `/review` (cross-audit orchestrator, Cloudflare pattern)
+
+- **`/review`** and **`/review --full`** — fan out to 9 narrow-scope reviewers
+  in parallel, then a different model (haiku) tries to **refute** each
+  finding (cross-audit), then reachability is determined separately for
+  security findings (chain split). Effective severity comes from
+  deterministic code, not any single agent.
+- `bin/ucw-review.py` — orchestrator CLI: `scope`, `add-finding`, `disprove`,
+  `reachability`, `dedup`, `gate`, `approve`, `status`, `summary`, `list`.
+- `memory/ucw_memory/findings.py` — schema, append-only JSONL store under
+  `.ucw/reviews/<sha>/`, `_effective_severity()` derived from raw severity
+  + disprover verdict + reachability verdict (refuted → drop 2 levels;
+  unreachable security → drop 1 level).
+- 9 narrow-scope reviewer agents under `agents/reviewers/`: correctness,
+  injection, deserialization, auth, performance, data-loss, api-compat,
+  tests, docs. Each says "only my concern" — they explicitly will not flag
+  outside their scope.
+- `agents/disprover.md` — haiku model, **cannot generate new findings**;
+  job is to refute or confirm.
+- `agents/reachability.md` — sonnet, traces from external entry points to
+  the bug site; verdicts: reachable / unreachable / unclear.
+- `commands/review.md` — orchestration script; `--quick` for single-pass,
+  `--narrow <area>` to scope, `--since <ref>` for explicit base.
+- Governance lives outside the model: approve/audit-trail/gate are all
+  deterministic and persisted; the model can't bypass them.
+
+### Polish pass (prior)
+- Every CLI has `--help`, structured JSON output, meaningful exit codes
 - `ruff.toml` config + `ruff check` integrated into CI
 - `CONTRIBUTING.md`, `SECURITY.md`, `CHANGELOG.md`
 - `dashboard/statusline.sh` — Claude Code statusLine showing phase, streak, memory, stale-doc count
