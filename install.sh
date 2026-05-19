@@ -28,7 +28,7 @@ DRY_RUN=0
 VERBOSE=0
 
 log()   { printf '[ucw] %s\n' "$*"; }
-debug() { (( VERBOSE )) && printf '[ucw] · %s\n' "$*" >&2 || true; }
+debug() { if (( VERBOSE )); then printf '[ucw] - %s\n' "$*" >&2; fi; }
 warn()  { printf '[ucw] WARN: %s\n' "$*" >&2; }
 die()   { printf '[ucw] ERR:  %s\n' "$*" >&2; exit 1; }
 
