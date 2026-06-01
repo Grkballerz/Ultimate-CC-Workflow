@@ -1,0 +1,14 @@
+[run]
+source = .
+omit =
+  tests/*
+  scripts/*
+  .venv/*
+  */__pycache__/*
+
+[report]
+skip_empty = true
+exclude_lines =
+  if __name__ == .__main__.:
+  pragma: no cover
+  except BrokenPipeError:

@@ -1,0 +1,26 @@
+{
+  "name": "ucw",
+  "description": "Ultimate Claude Code Workflow — opinionated synthesis of Knowledge, Memory, 5-phase Workflow, multi-agent Orchestration, instinct Learning, and live Observability.",
+  "owner": {
+    "name": "UCW",
+    "url": "https://github.com/grkballerz/ultimate-cc-workflow"
+  },
+  "plugins": [
+    {
+      "name": "ucw",
+      "source": ".",
+      "description": "All-in-one bundle: 8 agents, 10 slash commands, 9 hooks, 7 Knowledge templates, FTS5+Voyage+Claude memory MCP, security audit, observability dashboard, statusLine. Use `install.sh --profile {minimal|standard|full}` after marketplace install to lay down rules and configure hooks.",
+      "keywords": [
+        "workflow",
+        "memory",
+        "knowledge",
+        "subagents",
+        "skills",
+        "hooks",
+        "orchestration",
+        "observability",
+        "security-audit"
+      ]
+    }
+  ]
+}

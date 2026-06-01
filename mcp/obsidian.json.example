@@ -1,0 +1,11 @@
+{
+  "_doc": "Optional: route Knowledge writes through Obsidian. Copy to ~/.claude/mcp.json under mcpServers.obsidian, set vault path.",
+  "obsidian": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-obsidian"],
+    "env": {
+      "OBSIDIAN_VAULT_PATH": "${HOME}/Obsidian/MyVault"
+    }
+  }
+}

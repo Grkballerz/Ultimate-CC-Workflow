@@ -1,0 +1,36 @@
+target-version = "py311"
+line-length = 110
+
+extend-exclude = [
+    "skills/promoted",
+    "**/.gitkeep",
+]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "S",   # bandit-lite security
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",  # line-too-long (handled by formatter)
+    "S101",  # assert is fine in tests
+    "S603",  # subprocess without shell=True — already careful
+    "S607",  # partial executable path in subprocess — git/python on PATH is fine
+    "B008",  # function calls in default args — common with Path() defaults
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S", "B", "E402"]
+"bin/**" = ["E402"]
+"hooks/**" = ["E402"]
+"dashboard/**" = ["E402"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

@@ -1,0 +1,72 @@
+{
+  "_profile": "ucw-standard",
+  "_description": "Memory + workflow agents + verification gates + inner-loop hooks.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/session-start.py" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/user-prompt-submit.py" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/pre-tool-use.py" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/post-tool-use.py" }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/post-tool-batch.py" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/subagent-stop.py" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/stop.py" }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/pre-compact.py" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${HOME}/.claude/ucw/hooks/session-end.py" }
+        ]
+      }
+    ]
+  }
+}

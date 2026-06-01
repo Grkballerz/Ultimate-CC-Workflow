@@ -1,0 +1,20 @@
+{
+  "name": "ucw",
+  "version": "0.1.0",
+  "description": "Ultimate Claude Code Workflow — opinionated synthesis of Knowledge, Memory, Workflow, Orchestration, Learning, and Observability for Claude Code.",
+  "author": {
+    "name": "UCW",
+    "url": "https://github.com/grkballerz/ultimate-cc-workflow"
+  },
+  "homepage": "https://github.com/grkballerz/ultimate-cc-workflow",
+  "license": "MIT",
+  "keywords": [
+    "workflow",
+    "memory",
+    "knowledge",
+    "subagents",
+    "skills",
+    "hooks",
+    "orchestration"
+  ]
+}

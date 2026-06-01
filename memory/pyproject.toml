@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ucw-memory"
+version = "0.1.0"
+description = "Ultimate Claude Code Workflow memory subsystem — hybrid FTS5 + sqlite-vec retrieval with Anthropic contextual prefixes."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    # Stdlib-only for the FTS5 path. sqlite-vec + voyage are optional extras.
+]
+
+[project.optional-dependencies]
+vec = ["sqlite-vec>=0.1.6"]
+voyage = ["voyageai>=0.2"]
+claude = ["anthropic>=0.40"]
+mcp = ["mcp>=1.0"]
+all = ["sqlite-vec>=0.1.6", "voyageai>=0.2", "anthropic>=0.40", "mcp>=1.0"]
+
+[project.scripts]
+ucw-memory = "ucw_memory.cli:main"
+
+[tool.setuptools.package-data]
+ucw_memory = ["../schema.sql"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ucw_memory*"]

@@ -1,0 +1,4 @@
+{
+  "_profile": "ucw-minimal",
+  "_description": "Memory MCP + core rules. No hooks, no gates."
+}
