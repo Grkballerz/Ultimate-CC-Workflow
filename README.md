@@ -77,13 +77,13 @@ Re-run via `/ucw prefs` to update any subset.
 |---|---|
 | `/ucw status` | Token budget, memory stats, gate pass rate, open work item |
 | `/ucw init` | Onboarding wizard |
-| `/plan <goal>` | Scope + plan, presents for approval |
-| `/ship` | Verify → land (commit, push, optional PR) |
-| `/recall <q>` | Hybrid memory search |
-| `/pin <fact>` | Force-include in future sessions |
-| `/distill` | Promote instincts to skills |
-| `/audit` | Security scan of UCW config itself |
-| `/dashboard` | Open observability UI |
+| `/ucw plan <goal>` | Scope + plan, presents for approval |
+| `/ucw ship` | Verify → land (commit, push, optional PR) |
+| `/ucw recall <q>` | Hybrid memory search |
+| `/ucw pin <fact>` | Force-include in future sessions |
+| `/ucw distill` | Promote instincts to skills |
+| `/ucw audit` | Security scan of UCW config itself |
+| `/ucw dashboard` | Open observability UI |
 
 ---
 

@@ -116,32 +116,32 @@ def test_all_reviewers_describe_their_scope_narrowly():
             f"reviewer-{concern}.md doesn't mention its own concern"
 
 
-def test_review_command_exists():
-    cmd = REPO_ROOT / "commands" / "review.md"
-    assert cmd.exists()
+def test_ucw_dispatcher_exists():
+    """commands/ucw.md is the umbrella that dispatches every subcommand."""
+    assert (REPO_ROOT / "commands" / "ucw.md").exists()
 
 
-def test_review_command_handles_bare_and_full():
-    """Both `/review` (no args) and `/review --full` must run the full pipeline."""
-    text = (REPO_ROOT / "commands" / "review.md").read_text(encoding="utf-8")
-    # Look for explicit instruction that empty args == full
-    assert re.search(r"empty.*--full|--full.*empty", text, re.IGNORECASE) is not None, \
-        "commands/review.md must document that empty $ARGUMENTS triggers the full pipeline"
+def test_review_subcommand_handles_bare_and_full():
+    """`/ucw review` (no args) and `/ucw review --full` must run the full pipeline."""
+    text = (REPO_ROOT / "commands" / "ucw.md").read_text(encoding="utf-8")
+    # Look for explicit instruction that empty args == full inside the review section
+    assert re.search(r"empty.*--full|--full.*empty|Empty args OR `--full`", text, re.IGNORECASE) is not None, \
+        "commands/ucw.md must document that bare `/ucw review` triggers the full pipeline"
 
 
-def test_review_command_references_real_bins():
-    text = (REPO_ROOT / "commands" / "review.md").read_text(encoding="utf-8")
+def test_review_subcommand_references_real_bins():
+    text = (REPO_ROOT / "commands" / "ucw.md").read_text(encoding="utf-8")
     assert "ucw-review.py" in text
 
 
-def test_review_command_references_disprover():
-    text = (REPO_ROOT / "commands" / "review.md").read_text(encoding="utf-8")
+def test_review_subcommand_references_disprover_and_reachability():
+    text = (REPO_ROOT / "commands" / "ucw.md").read_text(encoding="utf-8")
     assert "disprover" in text.lower()
     assert "reachability" in text.lower()
 
 
-def test_review_command_references_all_reviewers():
-    text = (REPO_ROOT / "commands" / "review.md").read_text(encoding="utf-8")
+def test_review_subcommand_references_all_reviewers():
+    text = (REPO_ROOT / "commands" / "ucw.md").read_text(encoding="utf-8")
     for concern in CONCERNS:
         assert f"reviewer-{concern}" in text, \
-            f"commands/review.md doesn't reference reviewer-{concern}"
+            f"commands/ucw.md doesn't reference reviewer-{concern}"

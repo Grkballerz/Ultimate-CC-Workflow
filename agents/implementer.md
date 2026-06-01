@@ -29,6 +29,6 @@ reviewer.
 - Don't skip verification steps — the post-tool-batch hook will block Stop
   after 5 edits with no test run.
 - Don't refactor adjacent code outside the task scope.
-- Don't `git commit` — that's the Land phase, owned by `/ship`.
+- Don't `git commit` — that's the Land phase, owned by `/ucw ship`.
 - If a task turns out infeasible as written, escalate to the planner (don't
   silently re-scope).

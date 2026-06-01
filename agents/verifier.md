@@ -35,5 +35,5 @@ next: fix tests/test_health.py:14
 ## Hard rules
 
 - Exit code 0 if all gates pass (or skipped because earlier gate failed and `--all` not set).
-- Exit code non-zero if any gate failed — `/ship` will refuse to proceed.
+- Exit code non-zero if any gate failed — `/ucw ship` will refuse to proceed.
 - Never edit code, never run formatters in-place. Suggest the fix; the implementer applies it.

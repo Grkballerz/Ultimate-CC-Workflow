@@ -4,7 +4,7 @@
 If the prompt mentions a dependency (e.g. "npm install"), we inject `STACK.md`.
 If it mentions architecture / design, we inject `DESIGN.md`. Cheap keyword
 matching keeps latency negligible; the heavier semantic-retrieval path lives
-in the memory MCP server (`/recall`).
+in the memory MCP server (`/ucw recall`).
 
 M1 baseline: simple keyword → file mapping. M3+ will add a memory.recall()
 call against the prompt for facts above a relevance threshold.

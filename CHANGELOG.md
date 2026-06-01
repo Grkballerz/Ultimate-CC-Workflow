@@ -5,12 +5,27 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
-### Added — `/review` (cross-audit orchestrator, Cloudflare pattern)
+### Changed — single `/ucw` umbrella (no built-in collisions)
 
-- **`/review`** and **`/review --full`** — fan out to 9 narrow-scope reviewers
-  in parallel, then a different model (haiku) tries to **refute** each
-  finding (cross-audit), then reachability is determined separately for
-  security findings (chain split). Effective severity comes from
+Claude Code reserves `/plan`, `/init`, and `/review` as built-in slash
+commands. All UCW commands are now subcommands of `/ucw` so there's
+exactly one root and zero collisions:
+
+  /ucw status | init | plan | ship | review | audit | recall | pin |
+       scribe | distill | dashboard | watch | unwatch | worktree |
+       phase | prefs | help
+
+The 10 standalone `commands/*.md` files were deleted and their behavior
+folded into `commands/ucw.md` as dispatch branches. A new test enforces
+the rule: any new file in `commands/` with a Claude-built-in name fails
+CI.
+
+### Added — `/ucw review` (cross-audit orchestrator, Cloudflare pattern)
+
+- **`/ucw review`** and **`/ucw review --full`** — fan out to 9 narrow-scope
+  reviewers in parallel, then a different model (haiku) tries to **refute**
+  each finding (cross-audit), then reachability is determined separately
+  for security findings (chain split). Effective severity comes from
   deterministic code, not any single agent.
 - `bin/ucw-review.py` — orchestrator CLI: `scope`, `add-finding`, `disprove`,
   `reachability`, `dedup`, `gate`, `approve`, `status`, `summary`, `list`.
@@ -26,7 +41,7 @@ loosely, semver in spirit.
   job is to refute or confirm.
 - `agents/reachability.md` — sonnet, traces from external entry points to
   the bug site; verdicts: reachable / unreachable / unclear.
-- `commands/review.md` — orchestration script; `--quick` for single-pass,
+- `commands/ucw.md` (review subcommand) — orchestration script; `--quick` for single-pass,
   `--narrow <area>` to scope, `--since <ref>` for explicit base.
 - Governance lives outside the model: approve/audit-trail/gate are all
   deterministic and persisted; the model can't bypass them.
@@ -61,8 +76,8 @@ loosely, semver in spirit.
 - Settings fragments for each profile, registering 9 hook event handlers
 - 8 subagent definitions: planner, implementer, verifier, reviewer,
   security-reviewer, memory-curator, scribe, onboarder
-- 10 slash commands: `/ucw`, `/init`, `/plan`, `/ship`, `/recall`, `/pin`,
-  `/scribe`, `/distill`, `/audit`, `/dashboard`
+- 10 slash commands (now consolidated under `/ucw`): `/ucw plan`, `/ucw ship`, `/ucw recall`, `/ucw pin`,
+  `/ucw scribe`, `/ucw distill`, `/ucw audit`, `/ucw dashboard`
 - 7 Knowledge templates: INDEX, STACK, DESIGN, CONVENTIONS, GLOSSARY,
   ROADMAP, PREFERENCES
 - Memory subsystem: SQLite + FTS5 + sqlite-vec-ready schema, real MCP server
@@ -72,7 +87,7 @@ loosely, semver in spirit.
 - 9 hooks: session-start/end, user-prompt-submit, pre/post-tool-use,
   post-tool-batch (streak breaker), stop, pre-compact, subagent-stop
 - Distillation pipeline with privacy stripping and bare-conclusion gate
-- Phase tracker (`bin/ucw-phase.py`) wired into `/plan` and `/ship`
+- Phase tracker (`bin/ucw-phase.py`) wired into `/ucw plan` and `/ucw ship`
 - Security audit scanner (`bin/ucw-audit.py`) with 14 secret families,
   5 injection patterns, MCP shell-exec detection, reviewer-write detection,
   `audit-allow:` suppression mechanism

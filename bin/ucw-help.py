@@ -133,7 +133,7 @@ def cmd_skills(_args: argparse.Namespace) -> int:
     print("UCW skills (in $REPO/skills/):")
     found = list(sorted((REPO / "skills").rglob("SKILL.md")))
     if not found:
-        print("  (none yet — run /distill to promote instincts into skills)")
+        print("  (none yet — run /ucw distill to promote instincts into skills)")
         return 0
     for p in found:
         meta, _ = _read_frontmatter(p)
