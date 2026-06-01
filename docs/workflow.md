@@ -10,8 +10,8 @@ Run it from the *user* perspective; for design rationale see `architecture.md`.
 | Situation | What to do |
 |---|---|
 | Trivial single-file edit ("fix typo in README") | Skip Scope+Plan. Edit → Verify → commit. |
-| Multi-file feature, unclear scope | Run `/plan <goal>`. Walk all 5 phases. |
-| Bug with known root cause | Skip Scope. Run `/plan` with the cause stated. |
+| Multi-file feature, unclear scope | Run `/ucw plan <goal>`. Walk all 5 phases. |
+| Bug with known root cause | Skip Scope. Run `/ucw plan` with the cause stated. |
 | Refactor / migration | Always full 5 phases — these bite hard when rushed. |
 | Hotfix to prod | Use full phases but compress: spec is 1 line, plan is 1-2 tasks. |
 
@@ -137,8 +137,8 @@ block. Slash commands write it.
 | Symptom | Probable cause | Fix |
 |---|---|---|
 | Stop blocked with "edit streak > 0" | Made changes without running tests | Run tests. The streak resets on any test invocation. |
-| Stop blocked with "Verify must pass" | In build phase, gates haven't been run | Run `/ship` (or the verifier directly). |
-| `/plan` keeps re-asking the same Scope question | Last session ended mid-Scope | `ucw-phase.py clear` then start fresh. |
+| Stop blocked with "Verify must pass" | In build phase, gates haven't been run | Run `/ucw ship` (or the verifier directly). |
+| `/ucw plan` keeps re-asking the same Scope question | Last session ended mid-Scope | `ucw-phase.py clear` then start fresh. |
 | Scribe drowning DESIGN.md in churn | `PREFERENCES.scribe_mode` is too aggressive | Set to `additive-only` or `propose-only`. |
 | Recall returns the wrong fact | FTS-only retrieval; need semantic match | Set `ANTHROPIC_API_KEY` for Claude reranker, or `VOYAGE_API_KEY` for Voyage. |
 | `make smoke` fails at step 6 | DB path / cwd mismatch | The smoke script `cd`s into the project dir before MCP recall — re-check that `.ucw/memory.sqlite` exists there. |

@@ -11,10 +11,10 @@ guidance see [`workflow.md`](workflow.md).
                                 ┌─────────────────────────────────────────┐
                                 │             Claude Code session          │
                                 │                                          │
-  ┌─ user types ─►  /plan ──────┼──► planner agent ──► .ucw/state/phase   │
-  │                /ship        │     implementer       .ucw/state/plan.md│
-  │                /recall      │     verifier          .ucw/state/streak │
-  │                /audit       │     reviewer                             │
+  ┌─ user types ─►  /ucw plan ──────┼──► planner agent ──► .ucw/state/phase   │
+  │                /ucw ship        │     implementer       .ucw/state/plan.md│
+  │                /ucw recall      │     verifier          .ucw/state/streak │
+  │                /ucw audit       │     reviewer                             │
   │                                  scribe                                │
   │                                                                        │
   │   Knowledge ◄──── scribe ◄──── Land ──┐                                │
@@ -145,5 +145,5 @@ Three concentric loops.
 - Embedding model: Voyage (`voyage-3` / `voyage-code-3` / `rerank-2`) + Claude Haiku for the contextual-prefix step. Claude-Haiku-only fallback for users without a Voyage key.
 - Knowledge backing store: local `.ucw/knowledge/*.md` is always the source of truth; Obsidian and Notion are opt-in mirrors.
 - Scribe aggressiveness: auto-apply additive edits, pause for structural rewrites (tunable in PREFERENCES).
-- Cross-project memory promotion: `/pin --global` available from v1.
+- Cross-project memory promotion: `/ucw pin --global` available from v1.
 - Onboarding ask budget: 6 questions up front (image, diagrams, deploy, db, package manager, docs surface); JIT for the rest.

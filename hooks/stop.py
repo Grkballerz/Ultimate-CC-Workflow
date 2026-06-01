@@ -65,12 +65,12 @@ def main() -> int:
             "decision": "block",
             "reason": (
                 f"UCW: cannot Stop in Build phase with {streak} edits not verified. "
-                f"Run the verifier (or `/ship`) — the Verify phase gate must pass before "
+                f"Run the verifier (or `/ucw ship`) — the Verify phase gate must pass before "
                 f"the session can end."
             ),
             "hookSpecificOutput": {
                 "hookEventName": "Stop",
-                "additionalContext": "Run tests now, then `/ship` to Verify + Land.",
+                "additionalContext": "Run tests now, then `/ucw ship` to Verify + Land.",
             },
         })
         return 0

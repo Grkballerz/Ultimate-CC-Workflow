@@ -7,7 +7,7 @@ heuristic patterns to surface candidate facts. Each fact must contain a
 to pass the quality gate — bare conclusions are dropped.
 
 The v1 extractor is deliberately conservative: it only emits high-confidence,
-well-formed facts. False negatives are fine — the user can `/pin` anything
+well-formed facts. False negatives are fine — the user can `/ucw pin` anything
 that should have been captured. False positives are expensive (memory rot).
 
 A future v2 will run a Haiku pass for soft fact extraction; this regex layer

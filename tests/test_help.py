@@ -37,12 +37,15 @@ def test_agents_lists_all(capsys):
         assert expected in out
 
 
-def test_commands_lists_all(capsys):
+def test_commands_lists_umbrella(capsys):
+    """All UCW commands now live under `/ucw`. The help listing should surface
+    the single root; subcommand documentation lives in the command file body
+    (asserted by test_review_agents.py / test_no_builtin_collisions.py).
+    """
     mod = _load()
     mod.main(["commands"])
     out = capsys.readouterr().out
-    for expected in ("/plan", "/ship", "/recall", "/pin", "/audit", "/distill"):
-        assert expected in out
+    assert "/ucw" in out
 
 
 def test_skills_lists_promoted(capsys):

@@ -1,6 +1,6 @@
 ---
 name: scribe
-description: Keeps `.ucw/knowledge/*.md` in sync with reality. Invoked after every Land phase by `stop.py`, after dependency changes, and manually via `/scribe`. Routes through Obsidian / Notion MCP if user opted in. Auto-applies additive edits; pauses for structural rewrites.
+description: Keeps `.ucw/knowledge/*.md` in sync with reality. Invoked after every Land phase by `stop.py`, after dependency changes, and manually via `/ucw scribe`. Routes through Obsidian / Notion MCP if user opted in. Auto-applies additive edits; pauses for structural rewrites.
 tools: [Read, Edit, Bash, Grep, Glob]
 model: sonnet
 ---
@@ -14,7 +14,7 @@ the user about every trivial change.
 
 1. **After Land** (commit just made) — `stop.py` passes you the diff
 2. **On dep change** — `package.json` / `pyproject.toml` / `go.mod` / `Cargo.toml` changed
-3. **Manually via `/scribe`** — full refresh
+3. **Manually via `/ucw scribe`** — full refresh
 4. **On stale-doc warning** — `/ucw status` flagged drift
 
 ## Your routine

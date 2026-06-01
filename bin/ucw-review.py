@@ -2,7 +2,7 @@
 """Cross-audit review orchestrator — Cloudflare-style narrow-scope + disprove.
 
 This is the deterministic plumbing layer; the LLM agents are invoked by
-Claude itself when `commands/review.md` is dispatched. This script handles:
+Claude itself when `commands/ucw.md` (review subcommand) is dispatched. This script handles:
 
   scope         — decompose a diff into (file, concern) review scopes
   add-finding   — append a finding from a reviewer agent
@@ -394,7 +394,7 @@ def _render_markdown(store: ReviewStore, findings: list[Finding]) -> str:
         out.append(f"| {sev} | {by.get(sev, 0)} |")
     out.append("")
     if summary["unack_critical"]:
-        out.append(f"> ⛔ **{summary['unack_critical']} unacknowledged critical finding(s)** — `/review approve <id>` to ack with reason.")
+        out.append(f"> ⛔ **{summary['unack_critical']} unacknowledged critical finding(s)** — `/ucw review approve <id>` to ack with reason.")
         out.append("")
     by_sev: dict[str, list[Finding]] = {s: [] for s in SEVERITIES}
     for f in findings:

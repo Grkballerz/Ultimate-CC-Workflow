@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    - {r}")
             if len(s.reasons) > 3:
                 print(f"    … and {len(s.reasons) - 3} more")
-        print("\nRun /scribe to refresh.")
+        print("\nRun /ucw scribe to refresh.")
     else:
         print("Knowledge is fresh ✓")
 

@@ -41,7 +41,7 @@ def test_skills_empty_message(tmp_path, monkeypatch, capsys):
     mod.cmd_skills(None)
     out = capsys.readouterr().out
     assert "none yet" in out
-    assert "/distill" in out
+    assert "ucw distill" in out
 
 
 def test_repo_root_resolves_via_symlink(tmp_path, monkeypatch):

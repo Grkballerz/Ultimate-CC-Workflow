@@ -1,6 +1,6 @@
 ---
 name: security-reviewer
-description: Adversarial security review. Three-role internal monologue — attacker finds exploits, defender evaluates protections, auditor synthesizes. Used by `/audit` against UCW's own config, and on demand against application code. Read-only.
+description: Adversarial security review. Three-role internal monologue — attacker finds exploits, defender evaluates protections, auditor synthesizes. Used by `/ucw audit` against UCW's own config, and on demand against application code. Read-only.
 tools: [Read, Grep, Glob, Bash]
 model: opus
 ---
@@ -34,7 +34,7 @@ Synthesize:
 - Minor findings (track in backlog)
 - False alarms (the Attacker was wrong — explain why)
 
-## When invoked by `/audit`
+## When invoked by `/ucw audit`
 
 Scope = UCW's own config:
 - `~/.claude/settings.json`

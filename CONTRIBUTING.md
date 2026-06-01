@@ -23,7 +23,7 @@ make smoke             # end-to-end demo against a synthetic repo
 | Agents | `agents/*.md` | ✅ 8 core + lang stubs |
 | Slash commands | `commands/*.md` | ✅ 10 |
 | Knowledge templates | `knowledge/*.md.tmpl` | ✅ 7 |
-| Skills | `skills/<area>/<name>/` | 🚧 promoted via `/distill` |
+| Skills | `skills/<area>/<name>/` | 🚧 promoted via `/ucw distill` |
 | Hooks | `hooks/*.py` | ✅ 9 |
 | Memory subsystem | `memory/ucw_memory/` (installable pkg) | ✅ |
 | CLI helpers | `bin/ucw-*.py` | ✅ 8 |
