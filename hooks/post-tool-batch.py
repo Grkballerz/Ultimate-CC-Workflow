@@ -18,13 +18,16 @@ Detection notes:
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, read_payload, state_file, write_output
+from _hook_common import log, read_payload, state_file, ucw_dir, write_output
 
 STREAK_THRESHOLD = 5
 
@@ -109,29 +112,56 @@ def _batch_ran_tests(payload: dict) -> bool:
     return _scan_for_test_command(payload)
 
 
+def _maybe_capture_payload(payload: dict) -> None:
+    """If `UCW_DEBUG_PAYLOADS=1` or `.ucw/state/debug-payloads` exists, dump
+    the raw payload to `.ucw/state/post-tool-batch-payloads.jsonl` so the
+    user can verify the walker actually matches what Claude Code is sending.
+
+    Off by default — payloads can be large or include path data."""
+    enabled = (
+        os.environ.get("UCW_DEBUG_PAYLOADS", "").strip() in {"1", "true", "yes"}
+        or (ucw_dir(payload) / "state" / "debug-payloads").exists()
+    )
+    if not enabled:
+        return
+    try:
+        out = ucw_dir(payload) / "state" / "post-tool-batch-payloads.jsonl"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": int(time.time()), "payload": payload}))
+            fh.write("\n")
+    except (OSError, TypeError):
+        pass  # never let debug logging break the hook
+
+
 def main() -> int:
     payload = read_payload()
+    _maybe_capture_payload(payload)
 
-    if _batch_ran_tests(payload):
+    detected = _batch_ran_tests(payload)
+    streak_before = _streak(payload)
+    log(payload,
+        f"detection={detected} streak={streak_before} batch_keys={sorted(payload.keys())}")
+
+    if detected:
         _reset_streak(payload)
         return 0
 
-    streak = _streak(payload)
-    if streak < STREAK_THRESHOLD:
+    if streak_before < STREAK_THRESHOLD:
         return 0
 
-    log(payload, f"streak breaker fired: {streak} edits without a test run")
+    log(payload, f"streak breaker fired: {streak_before} edits without a test run")
     write_output({
         "decision": "block",
         "reason": (
-            f"UCW streak breaker: {streak} edits without running tests. "
+            f"UCW streak breaker: {streak_before} edits without running tests. "
             f"Run the test suite (or the relevant test file) before continuing — "
             f"untested edit chains lead to regression debt."
         ),
         "hookSpecificOutput": {
             "hookEventName": "PostToolBatch",
             "additionalContext": (
-                f"Edit streak = {streak}. Run tests now. After tests pass, the "
+                f"Edit streak = {streak_before}. Run tests now. After tests pass, the "
                 f"streak resets and you can continue."
             ),
         },

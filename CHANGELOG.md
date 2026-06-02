@@ -5,6 +5,28 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Added — PostToolBatch observability (always-on log + opt-in payload capture)
+
+Follow-up to the #8 fix so you can verify in production that the recursive
+walker matches what Claude Code actually sends.
+
+- **Always on**: every `PostToolBatch` invocation now writes a
+  `detection=<bool> streak=<n> batch_keys=<list>` line to `.ucw/hooks.log`.
+  Run `tail -f .ucw/hooks.log` during a build and you'll see whether
+  detection fired on each batch.
+- **Opt-in raw capture**: setting `UCW_DEBUG_PAYLOADS=1` *or* touching
+  `.ucw/state/debug-payloads` makes the hook append the full payload to
+  `.ucw/state/post-tool-batch-payloads.jsonl` (one JSON per line).
+  Off by default — payloads can include path data. Delete the sentinel
+  file or unset the env var to stop capturing.
+
+Use case: if the new walker ever misses a test run in real usage, flip on
+capture for one session and the exact payload shape is recorded for the
+next round of detection-rule tuning.
+
+4 new tests in `tests/test_post_tool_batch_detection.py` cover the log
+line and both capture paths.
+
 ### Fixed — PostToolBatch streak breaker now actually detects test runs (#8)
 
 The streak breaker hook (`hooks/post-tool-batch.py`) was supposed to reset
