@@ -5,6 +5,25 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Fixed — install.sh actually installs commands, agents, and skills
+
+The previous installer copied rules + hooks + bin but **never linked the
+slash commands, subagents, or skills** into Claude Code's discovery dirs.
+`/ucw` wasn't a command, `reviewer-injection` couldn't be invoked as a
+subagent, and the shipped skills were undiscoverable.
+
+Added three install actions:
+- `install_commands` symlinks `commands/*.md` → `~/.claude/commands/`
+- `install_agents` flat-links every `.md` under `agents/` (incl.
+  `agents/reviewers/*`) → `~/.claude/agents/` (Claude Code uses the
+  `name:` frontmatter, not filename, so flat-linking by basename works)
+- `install_skills` symlinks each SKILL.md's parent dir →
+  `~/.claude/skills/<name>/` so adjacent assets travel with it
+
+Uninstall (`_remove_ucw_symlinks_in`) walks each dir and removes only
+symlinks whose `readlink` target lives under `$REPO_ROOT` — user-authored
+commands/agents/skills are left alone. 7 regression tests lock this in.
+
 ### Fixed — install.sh respects PEP 668 (Debian / Ubuntu / Zorin / Homebrew 3.11+)
 
 The previous installer ran `pip install -e ./memory` against the system
