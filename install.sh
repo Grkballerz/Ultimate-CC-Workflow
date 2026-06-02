@@ -102,6 +102,54 @@ install_rules() {
   log "installed rules → $CLAUDE_HOME/rules/ucw"
 }
 
+install_commands() {
+  # Symlink every commands/*.md into ~/.claude/commands/ so the user-level
+  # command loader finds them. Currently this is just `ucw.md` (the umbrella);
+  # if a future PR adds another top-level command, this still picks it up.
+  run mkdir -p "$CLAUDE_HOME/commands"
+  for f in "$REPO_ROOT/commands/"*.md; do
+    [[ -e "$f" ]] || continue
+    local dest
+    dest="$CLAUDE_HOME/commands/$(basename "$f")"
+    run ln -sf "$f" "$dest"
+  done
+  log "linked commands → $CLAUDE_HOME/commands"
+}
+
+install_agents() {
+  # Flat-link every .md file under agents/ (recursive) into ~/.claude/agents/.
+  # Claude Code discovers agents by their `name:` frontmatter, not by filename,
+  # so we keep basenames; reviewer-correctness.md and friends stay distinct
+  # because their basenames are unique.
+  run mkdir -p "$CLAUDE_HOME/agents"
+  while IFS= read -r -d '' f; do
+    local dest
+    dest="$CLAUDE_HOME/agents/$(basename "$f")"
+    run ln -sf "$f" "$dest"
+  done < <(find "$REPO_ROOT/agents" -type f -name '*.md' -print0)
+  log "linked agents → $CLAUDE_HOME/agents (incl. reviewers/*)"
+}
+
+install_skills() {
+  # Symlink each SKILL.md's parent directory so adjacent assets (resources/,
+  # INSTRUCTIONS.md, etc.) come along. Skill name is the directory name,
+  # which is unique across the repo.
+  #
+  # -n is critical for the directory target case: bare `ln -sf` on an
+  # existing symlink-to-dir dereferences and writes INSIDE the linked
+  # directory, creating self-referential symlinks on reinstall. `-n`
+  # replaces the symlink itself, which is what we want.
+  run mkdir -p "$CLAUDE_HOME/skills"
+  while IFS= read -r -d '' skill_md; do
+    local skill_dir
+    skill_dir="$(dirname "$skill_md")"
+    local dest
+    dest="$CLAUDE_HOME/skills/$(basename "$skill_dir")"
+    run ln -sfn "$skill_dir" "$dest"
+  done < <(find "$REPO_ROOT/skills" -type f -name 'SKILL.md' -print0)
+  log "linked skills → $CLAUDE_HOME/skills"
+}
+
 install_hooks() {
   run mkdir -p "$UCW_HOME/hooks"
   for f in "$REPO_ROOT/hooks/"*.py; do
@@ -123,8 +171,11 @@ install_bin() {
     base="$(basename "$f")"
     run ln -sf "$f" "$UCW_HOME/bin/$base"
   done
-  # dashboard CLI lives at lib/ since it's package-style
-  run ln -sf "$REPO_ROOT/dashboard" "$UCW_HOME/lib/dashboard"
+  # dashboard CLI lives at lib/ since it's package-style.
+  # -n is critical: `ln -sf` on a directory dest dereferences existing
+  # symlinks and writes inside; `-n` replaces the symlink itself, which
+  # is what idempotent reinstall actually wants.
+  run ln -sfn "$REPO_ROOT/dashboard" "$UCW_HOME/lib/dashboard"
   log "linked bin helpers → $UCW_HOME/bin"
   if ! echo ":$PATH:" | grep -q ":$UCW_HOME/bin:"; then
     log "tip: add to your shell: export PATH=\"\$HOME/.claude/ucw/bin:\$PATH\""
@@ -271,6 +322,8 @@ verify_install() {
   local ok=1
   [[ -d "$CLAUDE_HOME/rules/ucw" ]] || { warn "rules dir missing"; ok=0; }
   [[ -L "$UCW_HOME/bin/ucw-audit.py" ]] || { warn "audit helper not linked"; ok=0; }
+  [[ -L "$CLAUDE_HOME/commands/ucw.md" ]] || { warn "/ucw command not linked"; ok=0; }
+  [[ -L "$CLAUDE_HOME/agents/planner.md" ]] || { warn "planner agent not linked"; ok=0; }
   command -v jq >/dev/null 2>&1 || { warn "jq missing — settings merges will fail"; ok=0; }
   if [[ -f "$CLAUDE_HOME/mcp.json" ]]; then
     jq -e '.mcpServers["ucw-memory"]' "$CLAUDE_HOME/mcp.json" >/dev/null 2>&1 || {
@@ -284,10 +337,29 @@ verify_install() {
   fi
 }
 
+_remove_ucw_symlinks_in() {
+  # Remove symlinks in $1 whose readlink target lives under $REPO_ROOT.
+  # Leaves the user's own files alone.
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  while IFS= read -r -d '' link; do
+    local target
+    target="$(readlink -f "$link" 2>/dev/null || true)"
+    if [[ -n "$target" && "$target" == "$REPO_ROOT"* ]]; then
+      run rm -rf "$link"
+    fi
+  done < <(find "$dir" -maxdepth 1 -type l -print0)
+}
+
 uninstall() {
   log "removing UCW from $CLAUDE_HOME"
   run rm -rf "$CLAUDE_HOME/rules/ucw" "$UCW_HOME/hooks" "$UCW_HOME/bin" \
              "$UCW_HOME/lib" "$UCW_HOME/venv"
+  # Remove only the symlinks we created in commands/agents/skills; preserve
+  # any commands/agents/skills the user authored themselves.
+  _remove_ucw_symlinks_in "$CLAUDE_HOME/commands"
+  _remove_ucw_symlinks_in "$CLAUDE_HOME/agents"
+  _remove_ucw_symlinks_in "$CLAUDE_HOME/skills"
   # Strip ucw entries from settings.json while preserving the user's own.
   if [[ -f "$CLAUDE_SETTINGS" && $DRY_RUN -eq 0 ]]; then
     python3 "$REPO_ROOT/bin/ucw-merge-settings.py" \
@@ -322,6 +394,9 @@ if (( POST_MARKETPLACE )); then
   install_rules
   install_hooks
   install_bin
+  install_commands
+  install_agents
+  install_skills
   apply_profile "${PROFILE:-standard}"
   verify_install
   log "post-marketplace setup complete."
@@ -332,7 +407,12 @@ case "$PROFILE" in
   minimal|standard|full)
     install_rules
     install_bin
+    install_commands
+    install_agents
+    # Skills are most useful with hooks (TDD loop, commit discipline) so
+    # we ship them in standard/full only — minimal stays lean.
     [[ "$PROFILE" != "minimal" ]] && install_hooks
+    [[ "$PROFILE" != "minimal" ]] && install_skills
     install_memory_deps
     register_mcp
     apply_profile "$PROFILE"
