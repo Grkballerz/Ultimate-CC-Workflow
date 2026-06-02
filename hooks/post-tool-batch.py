@@ -7,16 +7,56 @@ guardrails.
 
 State lives in `.ucw/state/edit-streak` (incremented by post-tool-use.py,
 reset here when a test run is detected).
+
+Detection notes:
+- Claude Code's PostToolBatch payload shape isn't formally documented and
+  has shifted across versions (sometimes `tools`, sometimes `batch`,
+  sometimes nested under `tool_results`). Rather than hardcode one shape,
+  we recursively scan every string value in the payload for known test
+  runner invocations with word-boundary matching — so `pytest -q` counts
+  but `tests/test_pytest.py` does not.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _hook_common import log, read_payload, state_file, write_output
 
 STREAK_THRESHOLD = 5
+
+# Word-boundary patterns for each runner. `\b` keeps `tests/` paths and
+# variable names like `pytest_plugins` from triggering a false positive.
+# `go test` and `cargo test` need the two-word form to avoid matching
+# the bare words `test`/`go`/`cargo` in unrelated contexts.
+_TEST_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bpytest\b"),
+    re.compile(r"\bvitest\b"),
+    re.compile(r"\bjest\b"),
+    re.compile(r"\bmocha\b"),
+    re.compile(r"\brspec\b"),
+    re.compile(r"\bplaywright\s+test\b"),
+    re.compile(r"\bgo\s+test\b"),
+    re.compile(r"\bcargo\s+test\b"),
+    re.compile(r"\bmake\s+test\b"),
+    re.compile(r"\bnpm\s+(?:run\s+)?test\b"),
+    re.compile(r"\bpnpm\s+(?:run\s+)?test\b"),
+    re.compile(r"\byarn\s+(?:run\s+)?test\b"),
+    re.compile(r"\bbun\s+test\b"),
+    re.compile(r"\bphpunit\b"),
+)
+
+# Keys whose values are almost certainly file paths, not commands. Skipping
+# them avoids false positives like `tests/test_pytest.py` triggering a match
+# despite the word-boundary regex (a path can contain `\bpytest\b`).
+_PATH_LIKE_KEYS = frozenset({
+    "file_path", "filepath", "path", "cwd", "transcript_path",
+    "session_id", "agent_id", "agent_type", "permission_mode",
+    "hook_event_name",
+})
 
 
 def _streak(payload: dict) -> int:
@@ -38,17 +78,35 @@ def _reset_streak(payload: dict) -> None:
             pass
 
 
-def _batch_ran_tests(payload: dict) -> bool:
-    """Inspect the batch payload for any Bash call that looks test-y."""
-    tools = payload.get("tools", []) or payload.get("batch", []) or []
-    test_signals = ("pytest", "vitest", "jest", "go test", "cargo test", "rspec", "mocha")
-    for entry in tools:
-        if not isinstance(entry, dict):
-            continue
-        cmd = (entry.get("tool_input", {}) or {}).get("command", "")
-        if any(sig in cmd for sig in test_signals):
-            return True
+def _looks_like_test_command(s: str) -> bool:
+    return any(p.search(s) for p in _TEST_SIGNAL_PATTERNS)
+
+
+def _scan_for_test_command(node: Any, *, parent_key: str = "") -> bool:
+    """Walk an arbitrary JSON-shaped payload looking for a test command string.
+
+    We don't pin down the exact shape because Claude Code's PostToolBatch
+    payload is not stably documented; instead we look at every leaf string
+    that could plausibly be a shell command, skipping fields we know are
+    paths.
+    """
+    if isinstance(node, str):
+        if parent_key in _PATH_LIKE_KEYS:
+            return False
+        return _looks_like_test_command(node)
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if _scan_for_test_command(v, parent_key=k):
+                return True
+        return False
+    if isinstance(node, list):
+        return any(_scan_for_test_command(item, parent_key=parent_key) for item in node)
     return False
+
+
+def _batch_ran_tests(payload: dict) -> bool:
+    """Inspect the batch payload for any tool call that looks test-y."""
+    return _scan_for_test_command(payload)
 
 
 def main() -> int:

@@ -149,6 +149,52 @@ def test_post_tool_batch_streak_breaker_is_schema_compliant(project):
     _validate(out, event_name="PostToolBatch")
 
 
+def test_post_tool_batch_realistic_payload_is_schema_compliant(project):
+    """Issue #8: the prior test only sent {"tools": []} which exercised the
+    block path but not the detection path. Cover both with a realistic
+    PostToolBatch payload that includes mixed tool entries."""
+    (project / ".ucw" / "state" / "edit-streak").write_text("7")
+    payload = {
+        "cwd": str(project),
+        "session_id": "abc123",
+        "hook_event_name": "PostToolBatch",
+        "tools": [
+            {"tool_name": "Edit",
+             "tool_input": {"file_path": str(project / "a.py")},
+             "tool_response": {"success": True}},
+            {"tool_name": "Bash",
+             "tool_input": {"command": "ls -la"},
+             "tool_response": {"success": True}},
+        ],
+    }
+    _, out, _ = _run("post-tool-batch.py", payload)
+    _validate(out, event_name="PostToolBatch")
+    body = json.loads(out)
+    # No test command in payload → must still block at threshold
+    assert body["decision"] == "block"
+
+
+def test_post_tool_batch_test_run_detected_emits_nothing(project):
+    """Issue #8: when a test command is in the batch, output must be empty
+    (streak resets, Stop allowed). This locks in the INPUT-side schema
+    compliance the original PR #6 work missed."""
+    (project / ".ucw" / "state" / "edit-streak").write_text("7")
+    payload = {
+        "cwd": str(project),
+        "hook_event_name": "PostToolBatch",
+        "tools": [
+            {"tool_name": "Bash",
+             "tool_input": {"command": "pytest -q"},
+             "tool_response": {"exit_code": 0}},
+        ],
+    }
+    _, out, _ = _run("post-tool-batch.py", payload)
+    assert out == "", \
+        f"detected test command → must reset streak and emit nothing, got: {out!r}"
+    streak = (project / ".ucw" / "state" / "edit-streak").read_text().strip()
+    assert streak == "0"
+
+
 def test_user_prompt_submit_injection_is_schema_compliant(project):
     knowledge = project / ".ucw" / "knowledge"
     knowledge.mkdir()
