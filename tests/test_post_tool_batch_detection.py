@@ -245,6 +245,50 @@ def test_detector_handles_deeply_nested_test_command(project):
         "tree walker must find test commands at any depth"
 
 
+def test_every_invocation_logs_detection_outcome(project):
+    """Every PostToolBatch call must emit a `detection=...` line in hooks.log
+    so `tail -f .ucw/hooks.log` shows whether detection fired."""
+    payload = {"cwd": str(project), "tools": [
+        {"tool_name": "Bash", "tool_input": {"command": "pytest -q"}},
+    ]}
+    _run(payload)
+    log = (project / ".ucw" / "hooks.log").read_text()
+    assert "detection=True" in log, (
+        f"detection outcome must be logged on every invocation, got:\n{log}"
+    )
+    assert "streak=3" in log
+    assert "batch_keys=" in log
+
+
+def test_capture_off_by_default(project):
+    """Raw payload capture must be opt-in — payloads can contain path data."""
+    payload = {"cwd": str(project), "tools": []}
+    _run(payload)
+    capture = project / ".ucw" / "state" / "post-tool-batch-payloads.jsonl"
+    assert not capture.exists(), "payload capture must be off without opt-in"
+
+
+def test_capture_on_via_sentinel_file(project):
+    sentinel = project / ".ucw" / "state" / "debug-payloads"
+    sentinel.touch()
+    payload = {"cwd": str(project), "tools": [
+        {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+    ]}
+    _run(payload)
+    capture = project / ".ucw" / "state" / "post-tool-batch-payloads.jsonl"
+    assert capture.exists(), "sentinel file must enable payload capture"
+    line = capture.read_text().strip()
+    assert '"ls"' in line, f"captured line should contain the raw payload, got: {line!r}"
+
+
+def test_capture_on_via_env_var(project, monkeypatch):
+    monkeypatch.setenv("UCW_DEBUG_PAYLOADS", "1")
+    payload = {"cwd": str(project), "tools": []}
+    _run(payload)
+    capture = project / ".ucw" / "state" / "post-tool-batch-payloads.jsonl"
+    assert capture.exists(), "UCW_DEBUG_PAYLOADS=1 must enable capture"
+
+
 def test_detector_ignores_test_command_in_path_field(project):
     """Even if a path key contains a test runner name (e.g. file_path =
     `/repo/tests/pytest_runner.py`), we must NOT count it as a test run."""
