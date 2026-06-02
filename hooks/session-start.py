@@ -1,17 +1,32 @@
 #!/usr/bin/env python3
-"""SessionStart hook — inject Knowledge INDEX and recently-pinned memory facts.
+"""SessionStart hook — side-effect only (logging, state-touch).
 
-Reads stdin (JSON from Claude Code), writes JSON to stdout with
-`hookSpecificOutput.additionalContext`. Non-blocking by design.
+Claude Code's strict hook output schema only accepts `hookSpecificOutput`
+on PreToolUse / UserPromptSubmit / PostToolUse / PostToolBatch. SessionStart
+isn't on that list — any `hookSpecificOutput.additionalContext` we tried
+to emit was being rejected with `Invalid input` by the harness.
 
-This is the M1 stub — wired into settings/standard.json and settings/full.json.
-M3 will replace the placeholder memory section with a real recall() call.
+The previous design injected the contents of `.ucw/knowledge/INDEX.md` and
+a "run /ucw init" hint into Claude's context at startup. Since that
+channel doesn't exist in the strict schema, this hook is now side-effect-
+only: it logs the session start to `.ucw/state/last-session-start` and
+exits with no JSON output.
+
+Knowledge / memory still get surfaced to Claude — just by different
+mechanisms that ARE in-schema:
+
+  - hooks/user-prompt-submit.py keyword-matches the prompt and injects
+    relevant `.ucw/knowledge/*.md` via the UserPromptSubmit
+    `additionalContext` field (this is allowed)
+  - the `/ucw status` command renders the inventory on demand
+  - `mcp__ucw-memory__memory.recall` is callable any time
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -22,46 +37,30 @@ def find_project_root(cwd: Path) -> Path:
     return cwd
 
 
-def load_knowledge_index(project_root: Path) -> str | None:
-    index = project_root / ".ucw" / "knowledge" / "INDEX.md"
-    if not index.exists():
-        return None
-    try:
-        return index.read_text(encoding="utf-8")
-    except OSError:
-        return None
-
-
-def suggest_init() -> str:
-    return (
-        "**UCW:** no `.ucw/` directory detected in this project. "
-        "Run `/ucw init` to bootstrap Knowledge + Memory for this repo."
-    )
-
-
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         payload = {}
 
     cwd = Path(payload.get("cwd", os.getcwd()))
     project_root = find_project_root(cwd)
-    index = load_knowledge_index(project_root)
+    state_dir = project_root / ".ucw" / "state"
 
-    if index is None:
-        additional_context = suggest_init()
-    else:
-        # M3 will append memory.recall() results here.
-        additional_context = f"## UCW Knowledge\n\n{index}"
+    # Best-effort log — never crash this hook.
+    try:
+        if state_dir.exists() or (project_root / ".ucw").exists():
+            state_dir.mkdir(parents=True, exist_ok=True)
+            (state_dir / "last-session-start").write_text(
+                f"{int(time.time())}\t{payload.get('session_id', '?')}\t"
+                f"{payload.get('source', payload.get('matcher', '?'))}\n",
+                encoding="utf-8",
+            )
+    except OSError:
+        pass
 
-    output = {
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": additional_context,
-        }
-    }
-    json.dump(output, sys.stdout)
+    # No JSON output — strict schema rejects hookSpecificOutput on SessionStart,
+    # and there's no top-level field that injects context for this event.
     return 0
 
 

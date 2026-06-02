@@ -61,17 +61,16 @@ def main() -> int:
 
     if phase == "build" and streak > 0:
         log(payload, f"Stop blocked: phase=build, dirty edits = {streak}")
+        # Claude Code's strict hook schema accepts hookSpecificOutput only for
+        # PreToolUse / UserPromptSubmit / PostToolUse / PostToolBatch. Stop
+        # gets decision + reason at the top level only.
         write_output({
             "decision": "block",
             "reason": (
                 f"UCW: cannot Stop in Build phase with {streak} edits not verified. "
                 f"Run the verifier (or `/ucw ship`) — the Verify phase gate must pass before "
-                f"the session can end."
+                f"the session can end. Tip: `/ucw ship` runs verify + lands the change."
             ),
-            "hookSpecificOutput": {
-                "hookEventName": "Stop",
-                "additionalContext": "Run tests now, then `/ucw ship` to Verify + Land.",
-            },
         })
         return 0
 

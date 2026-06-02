@@ -32,22 +32,25 @@ def project(tmp_path):
 
 
 # ---- session-start -----------------------------------------------------------
+# SessionStart no longer emits hookSpecificOutput (Claude Code's strict
+# schema rejects it for this event). The hook is side-effect only now.
 
-def test_session_start_suggests_init_when_no_ucw(tmp_path):
+def test_session_start_no_ucw_emits_no_output(tmp_path):
     rc, out, _ = _run("session-start.py", {"cwd": str(tmp_path)})
     assert rc == 0
-    body = json.loads(out)
-    assert "Run `/ucw init`" in body["hookSpecificOutput"]["additionalContext"]
+    assert out == "", "session-start must not emit JSON (strict schema)"
 
 
-def test_session_start_loads_index(project):
-    knowledge = project / ".ucw" / "knowledge"
-    knowledge.mkdir()
-    (knowledge / "INDEX.md").write_text("# Knowledge Index\n- STACK.md — python/flask\n")
-    rc, out, _ = _run("session-start.py", {"cwd": str(project)})
+def test_session_start_records_to_state(project):
+    """SessionStart writes .ucw/state/last-session-start as a side effect."""
+    rc, out, _ = _run("session-start.py", {
+        "cwd": str(project), "session_id": "s123", "source": "startup",
+    })
     assert rc == 0
-    body = json.loads(out)
-    assert "python/flask" in body["hookSpecificOutput"]["additionalContext"]
+    assert out == ""  # no JSON output
+    marker = project / ".ucw" / "state" / "last-session-start"
+    assert marker.exists()
+    assert "s123" in marker.read_text()
 
 
 # ---- pre-tool-use ------------------------------------------------------------

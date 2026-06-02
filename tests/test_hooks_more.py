@@ -44,6 +44,21 @@ def test_stop_blocks_in_build_with_streak(project):
     assert "Verify" in body["reason"] or "verify" in body["reason"]
 
 
+def test_stop_does_not_emit_hookSpecificOutput(project):
+    """Regression: Claude Code's strict schema only allows hookSpecificOutput
+    on PreToolUse / UserPromptSubmit / PostToolUse / PostToolBatch.
+    Emitting it on Stop produces `Invalid input` validation errors.
+    """
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    body = json.loads(out)
+    assert "hookSpecificOutput" not in body, (
+        "stop.py emitted hookSpecificOutput — Claude Code's strict hook "
+        "schema rejects this field for Stop. Use decision + reason only."
+    )
+
+
 def test_stop_allows_when_phase_not_build(project):
     (project / ".ucw" / "state" / "phase").write_text("plan")
     (project / ".ucw" / "state" / "edit-streak").write_text("3")
