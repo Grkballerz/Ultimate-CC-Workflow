@@ -94,6 +94,8 @@ def project(tmp_path):
 
 
 def test_stop_block_response_is_schema_compliant(project):
+    # Force a deterministic auto-verify failure so we get a block response.
+    (project / "Makefile").write_text("test:\n\t@false\n")
     (project / ".ucw" / "state" / "phase").write_text("build")
     (project / ".ucw" / "state" / "edit-streak").write_text("3")
     _, out, _ = _run("stop.py", {"cwd": str(project)})
