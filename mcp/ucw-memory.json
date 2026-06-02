@@ -1,7 +1,8 @@
 {
+  "_comment": "Reference shape for the ucw-memory MCP server registration. install.sh generates the actual entry into ~/.claude/mcp.json with the absolute path to whichever Python has ucw_memory installed (typically $HOME/.claude/ucw/venv/bin/python on PEP 668 systems like Debian / Ubuntu / Zorin / Homebrew 3.11+; otherwise the system python3). Do not hand-copy this file into mcp.json — let install.sh build the entry so the command path is correct for your environment.",
   "ucwMemory": {
     "type": "stdio",
-    "command": "python",
+    "command": "${HOME}/.claude/ucw/venv/bin/python",
     "args": ["-m", "ucw_memory.server"],
     "env": {
       "UCW_MEMORY_HOME": "${HOME}/.claude/ucw"

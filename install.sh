@@ -4,6 +4,7 @@
 # Usage:
 #   ./install.sh --profile {minimal|standard|full} [--dry-run] [--verbose]
 #   ./install.sh --post-marketplace [--profile standard]
+#   ./install.sh --reinstall-deps   (rebuild $UCW_HOME/venv from scratch)
 #   ./install.sh --uninstall
 #
 # Profiles:
@@ -26,6 +27,8 @@ POST_MARKETPLACE=0
 UNINSTALL=0
 DRY_RUN=0
 VERBOSE=0
+REINSTALL_DEPS=0      # rebuild $UCW_HOME/venv from scratch
+UCW_PYTHON=""         # set by install_memory_deps; read by register_mcp
 
 log()   { printf '[ucw] %s\n' "$*"; }
 debug() { if (( VERBOSE )); then printf '[ucw] - %s\n' "$*" >&2; fi; }
@@ -52,6 +55,7 @@ while [[ $# -gt 0 ]]; do
     --profile)          PROFILE="${2:-}"; shift 2 ;;
     --post-marketplace) POST_MARKETPLACE=1; shift ;;
     --uninstall)        UNINSTALL=1; shift ;;
+    --reinstall-deps)   REINSTALL_DEPS=1; shift ;;
     --dry-run)          DRY_RUN=1; shift ;;
     --verbose|-v)       VERBOSE=1; shift ;;
     -h|--help)          usage 0 ;;
@@ -129,38 +133,127 @@ install_bin() {
 
 install_memory_deps() {
   if (( DRY_RUN )); then
-    log "[DRY] would pip install -e $REPO_ROOT/memory"
+    log "[DRY] would set up Python env at $UCW_HOME/venv and install ucw-memory"
     return
   fi
-  if command -v uv >/dev/null 2>&1; then
-    log "installing ucw-memory via uv pip install -e ./memory"
-    (cd "$REPO_ROOT/memory" && uv pip install --quiet -e . 2>/dev/null) || \
-      warn "uv install failed — falling back to PYTHONPATH"
-  elif command -v pip >/dev/null 2>&1; then
-    log "installing ucw-memory via pip install -e ./memory"
-    pip install --quiet -e "$REPO_ROOT/memory" 2>/dev/null || \
-      warn "pip install failed — falling back to PYTHONPATH"
-  else
-    warn "no Python package manager — ucw_memory.server will rely on PYTHONPATH"
+
+  # If --reinstall-deps was passed, blow away the existing venv first so we
+  # get a clean rebuild against the current source tree.
+  if (( REINSTALL_DEPS )) && [[ -d "$UCW_HOME/venv" ]]; then
+    log "removing $UCW_HOME/venv (--reinstall-deps)"
+    rm -rf "$UCW_HOME/venv"
   fi
-  # Always export PYTHONPATH as a safety net for the MCP server.
-  log "tip: if MCP can't find ucw_memory, set PYTHONPATH=$REPO_ROOT/memory in your shell"
+
+  # If a venv already exists and has ucw_memory importable, reuse it.
+  if [[ -x "$UCW_HOME/venv/bin/python" ]] && \
+     "$UCW_HOME/venv/bin/python" -c "import ucw_memory" 2>/dev/null; then
+    UCW_PYTHON="$UCW_HOME/venv/bin/python"
+    log "reusing existing $UCW_HOME/venv (ucw-memory already installed)"
+    return
+  fi
+
+  # Strategy:
+  #   1. If uv is available, use it (handles PEP 668 transparently)
+  #   2. If system Python is externally-managed (PEP 668 / Debian / Ubuntu /
+  #      Zorin / Homebrew 3.11+), create a dedicated venv at $UCW_HOME/venv
+  #      and install there. The MCP server runs under this venv's python.
+  #   3. Else, install into the system Python directly.
+  #
+  # Either way, UCW_PYTHON is set to the python that has ucw_memory installed.
+  # register_mcp() uses it to write the absolute command path into mcp.json.
+
+  if command -v uv >/dev/null 2>&1; then
+    log "uv found — creating venv at $UCW_HOME/venv"
+    if uv venv "$UCW_HOME/venv" 2>/dev/null && \
+       uv pip install --quiet --python "$UCW_HOME/venv/bin/python" -e "$REPO_ROOT/memory"; then
+      UCW_PYTHON="$UCW_HOME/venv/bin/python"
+      log "installed ucw-memory into $UCW_HOME/venv"
+      return
+    fi
+    warn "uv install failed — falling back to direct pip"
+  fi
+
+  if _python_is_externally_managed; then
+    log "system Python is externally-managed (PEP 668) — creating venv at $UCW_HOME/venv"
+    if ! python3 -m venv "$UCW_HOME/venv" 2>/dev/null; then
+      warn "python3 -m venv failed (install python3-venv on Debian/Ubuntu/Zorin)"
+      warn "ucw-memory was NOT installed; the MCP server will not start"
+      return
+    fi
+    if "$UCW_HOME/venv/bin/pip" install --quiet --upgrade pip 2>/dev/null && \
+       "$UCW_HOME/venv/bin/pip" install --quiet -e "$REPO_ROOT/memory" 2>/dev/null; then
+      UCW_PYTHON="$UCW_HOME/venv/bin/python"
+      log "installed ucw-memory into $UCW_HOME/venv"
+      return
+    fi
+    warn "venv install failed — try: $UCW_HOME/venv/bin/pip install -e $REPO_ROOT/memory"
+    return
+  fi
+
+  if command -v pip >/dev/null 2>&1; then
+    log "installing ucw-memory via pip install -e ./memory"
+    if pip install --quiet -e "$REPO_ROOT/memory" 2>/dev/null; then
+      UCW_PYTHON="$(command -v python3)"
+      return
+    fi
+    warn "pip install failed (run with --verbose to see why)"
+    return
+  fi
+
+  warn "no Python package manager found — ucw-memory not installed"
+  warn "manually: python3 -m venv $UCW_HOME/venv && $UCW_HOME/venv/bin/pip install -e $REPO_ROOT/memory"
+}
+
+_python_is_externally_managed() {
+  # PEP 668: distros mark the stdlib path with an EXTERNALLY-MANAGED file.
+  # https://peps.python.org/pep-0668/
+  python3 - <<'PYEOF' 2>/dev/null
+import sys, os
+ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+for prefix in (sys.base_prefix, sys.prefix):
+    for lib in ("lib", "lib64"):
+        marker = os.path.join(prefix, lib, ver, "EXTERNALLY-MANAGED")
+        if os.path.exists(marker):
+            sys.exit(0)
+sys.exit(1)
+PYEOF
 }
 
 register_mcp() {
   local mcp_config="$CLAUDE_HOME/mcp.json"
   if (( DRY_RUN )); then
-    log "[DRY] would register ucw-memory in $mcp_config"
+    log "[DRY] would register ucw-memory in $mcp_config (command: ${UCW_PYTHON:-python3})"
     return
   fi
   [[ -f "$mcp_config" ]] || echo '{"mcpServers":{}}' > "$mcp_config"
+
+  # Use the python that actually has ucw_memory installed, or fall back to
+  # system python3 with PYTHONPATH so the user gets *something* working.
+  local cmd="${UCW_PYTHON:-python3}"
+  local pythonpath_env="{}"
+  if [[ -z "${UCW_PYTHON:-}" ]]; then
+    # Fallback path: rely on PYTHONPATH (won't load the [mcp] extras but
+    # the stdlib server will still work).
+    pythonpath_env='{"PYTHONPATH":"'"$REPO_ROOT/memory"'"}'
+    warn "ucw-memory not properly installed; falling back to PYTHONPATH in mcp.json"
+    warn "for a working install, ensure python3-venv is available and re-run"
+  fi
+
   local tmp
   tmp="$(mktemp)"
-  jq --argjson server "$(cat "$REPO_ROOT/mcp/ucw-memory.json")" \
-     '.mcpServers["ucw-memory"] = $server.ucwMemory' \
+  jq \
+    --arg cmd "$cmd" \
+    --arg ucw_home "$UCW_HOME" \
+    --argjson extra_env "$pythonpath_env" \
+    '.mcpServers["ucw-memory"] = {
+        type: "stdio",
+        command: $cmd,
+        args: ["-m", "ucw_memory.server"],
+        env: ({"UCW_MEMORY_HOME": $ucw_home} + $extra_env)
+     }' \
      "$mcp_config" > "$tmp"
   mv "$tmp" "$mcp_config"
-  log "registered ucw-memory MCP server in $mcp_config"
+  log "registered ucw-memory MCP server (command: $cmd)"
 }
 
 apply_profile() {
@@ -193,7 +286,8 @@ verify_install() {
 
 uninstall() {
   log "removing UCW from $CLAUDE_HOME"
-  run rm -rf "$CLAUDE_HOME/rules/ucw" "$UCW_HOME/hooks" "$UCW_HOME/bin" "$UCW_HOME/lib"
+  run rm -rf "$CLAUDE_HOME/rules/ucw" "$UCW_HOME/hooks" "$UCW_HOME/bin" \
+             "$UCW_HOME/lib" "$UCW_HOME/venv"
   # Strip ucw entries from settings.json while preserving the user's own.
   if [[ -f "$CLAUDE_SETTINGS" && $DRY_RUN -eq 0 ]]; then
     python3 "$REPO_ROOT/bin/ucw-merge-settings.py" \

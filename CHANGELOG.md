@@ -5,6 +5,34 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Fixed — install.sh respects PEP 668 (Debian / Ubuntu / Zorin / Homebrew 3.11+)
+
+The previous installer ran `pip install -e ./memory` against the system
+Python and fell back to "set PYTHONPATH" when that failed. On PEP 668
+systems (any modern Debian-family distro, Homebrew Python 3.11+) pip
+refuses to install into the system environment with `externally-managed-environment`,
+so the package was never installed. The MCP server's `command: python3` in
+mcp.json then couldn't import `ucw_memory` and Claude Code couldn't reach
+the memory tools.
+
+**Fix:**
+- `install.sh` now creates a dedicated venv at `$UCW_HOME/venv` whenever:
+  - `uv` is available (uv handles PEP 668 transparently), OR
+  - the system Python has the EXTERNALLY-MANAGED marker file
+- `ucw-memory` is installed into that venv (`-e ./memory`)
+- `mcp.json`'s `command` is now the **absolute path** to the venv's python
+  (`$UCW_HOME/venv/bin/python`), not bare `python3`
+- New flag `--reinstall-deps` blows away `$UCW_HOME/venv` and rebuilds
+- `--uninstall` now removes the venv along with hooks/bin/lib
+- The mcp.json template (`mcp/ucw-memory.json`) carries a `_comment`
+  documenting that install.sh generates the entry; don't hand-copy it
+
+7 regression tests in `tests/test_install_pep668.py` lock the invariants:
+venv exists, venv's python can import ucw_memory, mcp.json's command is
+the absolute venv path (not "python3"), reinstall reuses by default,
+`--reinstall-deps` rebuilds, `--uninstall` removes the venv,
+`--dry-run` creates nothing.
+
 ### Changed — single `/ucw` umbrella (no built-in collisions)
 
 Claude Code reserves `/plan`, `/init`, and `/review` as built-in slash
