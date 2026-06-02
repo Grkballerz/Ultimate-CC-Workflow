@@ -5,6 +5,53 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Fixed — hook output schema compliance + UCW state edits don't count toward streak
+
+Two real bugs that user testing exposed during a `/ucw plan` → `/ucw ship` run.
+
+**Bug A — Stop hook validation error.** Claude Code's strict hook output schema
+only allows `hookSpecificOutput` on `PreToolUse / UserPromptSubmit / PostToolUse
+/ PostToolBatch`. `stop.py` was emitting `hookSpecificOutput` on the `Stop`
+event, which the harness rejected with `Invalid input` — even though the
+top-level `decision: "block"` was honored. Same issue with `session-start.py`
+which used `hookSpecificOutput.additionalContext` for context injection.
+
+Fix:
+- `stop.py` — only emits top-level `decision` + `reason`. The hint that used
+  to live in `hookSpecificOutput.additionalContext` is now appended to `reason`.
+- `session-start.py` — rewritten as a side-effect-only hook. Writes
+  `.ucw/state/last-session-start` for the dashboard; emits no JSON. Knowledge
+  injection moves to `user-prompt-submit.py` (which IS allowed
+  `additionalContext`) and `/ucw status`.
+
+**Bug B — planner's state writes blocked Stop.** `post-tool-use.py`
+incremented the streak counter for every file edit inside the project, which
+included UCW writing its own state (`.ucw/state/plan.md`, `.ucw/reviews/...`,
+log files). After `/ucw plan`, streak was 1, phase was `build`, and `stop.py`
+refused to let the session end ("cannot Stop in Build phase with 1 edits not
+verified") — even when no actual code had changed.
+
+Fix: `post-tool-use.py` skips files under `.ucw/state/`, `.ucw/reviews/`,
+`.ucw/hooks.log`, `.ucw/sessions.log`, `.ucw/subagents.log`. They get logged
+("ignored UCW state write") but don't bump the streak or trigger syntax checks.
+
+**12 new tests** in `tests/test_hook_schema_compliance.py`:
+
+- One per hook (Stop, SessionStart, SubagentStop, PreCompact, SessionEnd,
+  PreToolUse, PostToolUse, PostToolBatch, UserPromptSubmit) asserting the
+  output (under realistic block/inject conditions) passes a strict schema
+  validator
+- `test_planner_writing_state_does_not_increment_streak`
+- `test_review_findings_log_does_not_increment_streak`
+- `test_real_code_edit_does_increment_streak` (sanity check the negative case)
+
+`tests/test_hooks.py::test_session_start_*` and
+`tests/test_hooks_more.py::test_stop_does_not_emit_hookSpecificOutput`
+updated to lock in the new shapes.
+
+376/376 passing. ruff clean, shellcheck (0.9 + 0.11) clean, audit clean,
+smoke green.
+
 ### Fixed — install.sh actually installs commands, agents, and skills
 
 The previous installer copied rules + hooks + bin but **never linked the

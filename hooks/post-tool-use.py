@@ -87,6 +87,24 @@ def _is_inside(path: Path, root: Path) -> bool:
         return False
 
 
+# Paths under these prefixes are UCW's own state — they don't count toward
+# the streak (which tracks UNVERIFIED CODE edits) and don't get syntax-
+# checked. Otherwise the planner writing `.ucw/state/plan.md` would block
+# Stop in build phase, which was the entire blocker the user hit.
+_UCW_OWN_STATE_PREFIXES = (".ucw/state/", ".ucw/reviews/", ".ucw/hooks.log",
+                          ".ucw/sessions.log", ".ucw/subagents.log")
+
+
+def _is_ucw_own_state(file_path: Path, root: Path) -> bool:
+    try:
+        rel = file_path.resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+    rel_str = str(rel)
+    return any(rel_str.startswith(p) or rel_str == p.rstrip("/")
+               for p in _UCW_OWN_STATE_PREFIXES)
+
+
 def main() -> int:
     payload = read_payload()
     tool_input = payload.get("tool_input", {}) or {}
@@ -106,6 +124,12 @@ def main() -> int:
     # streak and don't get syntax-checked here.
     if not _is_inside(file_path, root):
         log(payload, f"ignored edit outside project root: {file_path}")
+        return 0
+
+    # UCW writing to its own state (.ucw/state/plan.md, .ucw/reviews/...,
+    # log files) shouldn't count as an unverified code edit.
+    if _is_ucw_own_state(file_path, root):
+        log(payload, f"ignored UCW state write: {file_path}")
         return 0
 
     streak = _increment_edit_streak(payload)
