@@ -5,6 +5,32 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Fixed — PostToolBatch streak breaker now actually detects test runs (#8)
+
+The streak breaker hook (`hooks/post-tool-batch.py`) was supposed to reset
+the edit-streak counter when a Bash test invocation appeared in the batch
+of completed tool calls. It almost never did, because `_batch_ran_tests()`
+hardcoded one specific payload shape — `payload["tools"][i].tool_input.command` —
+that didn't match what Claude Code actually emits for `PostToolBatch`. The
+result: even right after `pytest -q` succeeded, the streak kept climbing and
+the next batch would block with "run tests now."
+
+`PostToolBatch`'s input schema isn't formally documented and has shifted
+across Claude Code versions. Rather than chase the moving target, the new
+implementation walks the payload tree recursively and matches known test
+runner names with **word-boundary regex**: `pytest`, `vitest`, `jest`,
+`mocha`, `rspec`, `playwright test`, `go test`, `cargo test`, `make test`,
+`npm/pnpm/yarn (run) test`, `bun test`, `phpunit`. Path-like keys
+(`file_path`, `cwd`, `transcript_path`, etc.) are skipped to avoid
+false-positives from filenames like `tests/test_pytest.py`.
+
+Tests: 25 new cases in `tests/test_post_tool_batch_detection.py` covering
+six plausible payload shape variants, twelve test-runner spellings, and
+defensive cases (missing keys, non-dict entries, deep nesting, path-key
+exclusion). The schema compliance suite (`tests/test_hook_schema_compliance.py`)
+also gains two PostToolBatch input-shape tests so PR #6's *output*-schema
+work is matched on the input side.
+
 ### Changed — Stop hook auto-verifies instead of hard-blocking
 
 When `phase=build` and `streak>0`, the Stop hook used to refuse Stop and tell
