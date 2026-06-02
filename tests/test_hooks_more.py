@@ -34,29 +34,87 @@ def project(tmp_path):
 
 
 # ---- stop --------------------------------------------------------------------
+# Stop now auto-runs verification (bin/ucw-verify.py) in build phase with
+# streak > 0. The semantics by case:
+#   project has failing tests → block with summary
+#   project has passing tests → clear streak, set phase=verify, allow Stop
+#   project has no test runner → allow Stop (no point blocking)
+#   UCW_SKIP_AUTO_VERIFY=1     → fall back to old hard block
 
-def test_stop_blocks_in_build_with_streak(project):
+def test_stop_blocks_with_failing_tests(project):
+    """A project with a failing test runner should produce a block + summary."""
+    (project / "Makefile").write_text("test:\n\t@echo 'mock failure' && false\n")
     (project / ".ucw" / "state" / "phase").write_text("build")
     (project / ".ucw" / "state" / "edit-streak").write_text("3")
     _rc, out, _ = _run("stop.py", {"cwd": str(project)})
     body = json.loads(out)
     assert body["decision"] == "block"
-    assert "Verify" in body["reason"] or "verify" in body["reason"]
+    assert "FAILED" in body["reason"] or "failure" in body["reason"].lower()
+
+
+def test_stop_allows_with_passing_tests(project):
+    """Passing tests → allow Stop, clear streak, advance phase=verify."""
+    (project / "Makefile").write_text("test:\n\t@true\n")
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    assert out == "", "passing auto-verify should produce no output (Stop allowed)"
+    # Streak cleared, phase advanced
+    streak = project / ".ucw" / "state" / "edit-streak"
+    assert not streak.exists() or streak.read_text().strip() == "0"
+    phase = (project / ".ucw" / "state" / "phase").read_text().strip()
+    assert phase == "verify"
+
+
+def test_stop_allows_when_no_runner_detected(project):
+    """No Makefile, no .ucw/knowledge/PREFERENCES.md, no detectable stack →
+    auto-verify reports skipped → Stop allowed (no point blocking)."""
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("1")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    assert out == ""
+    streak = project / ".ucw" / "state" / "edit-streak"
+    assert not streak.exists() or streak.read_text().strip() == "0"
+
+
+def test_stop_skip_env_falls_back_to_hard_block(project):
+    """UCW_SKIP_AUTO_VERIFY=1 → restore old blocking semantics for slow / external
+    verification setups."""
+    (project / "Makefile").write_text("test:\n\t@true\n")
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    env = {**os.environ, "UCW_SKIP_AUTO_VERIFY": "1"}
+    cp = subprocess.run(
+        [sys.executable, str(HOOKS / "stop.py")],
+        input=json.dumps({"cwd": str(project)}),
+        capture_output=True, text=True, env=env, timeout=10,
+    )
+    body = json.loads(cp.stdout)
+    assert body["decision"] == "block"
+    assert "UCW_SKIP_AUTO_VERIFY" in body["reason"]
+
+
+def test_stop_blocks_with_failure_summary_includes_command(project):
+    """The block reason should include the test command for context."""
+    (project / "Makefile").write_text("test:\n\t@false\n")
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("2")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    body = json.loads(out)
+    assert "make test" in body["reason"]
 
 
 def test_stop_does_not_emit_hookSpecificOutput(project):
     """Regression: Claude Code's strict schema only allows hookSpecificOutput
-    on PreToolUse / UserPromptSubmit / PostToolUse / PostToolBatch.
-    Emitting it on Stop produces `Invalid input` validation errors.
+    on PreToolUse / UserPromptSubmit / PostToolUse / PostToolBatch. Stop
+    must never emit it, including under the new auto-verify failure path.
     """
+    (project / "Makefile").write_text("test:\n\t@false\n")
     (project / ".ucw" / "state" / "phase").write_text("build")
     (project / ".ucw" / "state" / "edit-streak").write_text("3")
     _rc, out, _ = _run("stop.py", {"cwd": str(project)})
     body = json.loads(out)
-    assert "hookSpecificOutput" not in body, (
-        "stop.py emitted hookSpecificOutput — Claude Code's strict hook "
-        "schema rejects this field for Stop. Use decision + reason only."
-    )
+    assert "hookSpecificOutput" not in body
 
 
 def test_stop_allows_when_phase_not_build(project):

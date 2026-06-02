@@ -5,6 +5,41 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Changed — Stop hook auto-verifies instead of hard-blocking
+
+When `phase=build` and `streak>0`, the Stop hook used to refuse Stop and tell
+the user to run `/ucw ship` manually. That's friction for the common "I want
+to pause here, the diff already passes tests" case.
+
+Now Stop **auto-runs** project verification inline:
+
+  - tests **pass** → clear streak, advance phase to `verify`, allow Stop
+  - tests **fail** → block with the failing test output in the reason field
+  - tests **time out** → block with a hint about `UCW_VERIFY_TIMEOUT`
+  - no runner detected → allow Stop (no point blocking when there's nothing
+    to verify; configure `test_runner` in PREFERENCES to enable)
+
+The verifier is `bin/ucw-verify.py`, a new helper that:
+
+  - Picks a command in this order: PREFERENCES.md `test_runner` →
+    `make test` if Makefile has the target → auto-detect via
+    `ucw-detect-stack.py` (pytest, vitest, jest, go test, cargo, mocha, rspec)
+  - Defaults to a 60s timeout, overridable via `UCW_VERIFY_TIMEOUT=<sec>`
+  - Captures combined stdout+stderr, truncated to 2 KB for the block reason
+  - Returns structured JSON: `{passed, skipped?, command, exit_code,
+    elapsed_ms, timed_out, summary, source}`
+  - Exit codes: 0 pass / 1 fail / 2 timeout / 3 nothing to verify
+
+Escape hatch: `UCW_SKIP_AUTO_VERIFY=1` falls back to the old hard-block
+behavior (useful when tests need orchestration the hook can't do, e.g.
+`docker-compose up` first).
+
+20 new tests in `tests/test_verify.py` (detection, run paths, timeout,
+missing binary, env config) and refreshed Stop tests covering all four
+auto-verify outcomes.
+
+
+
 ### Fixed — hook output schema compliance + UCW state edits don't count toward streak
 
 Two real bugs that user testing exposed during a `/ucw plan` → `/ucw ship` run.
