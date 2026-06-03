@@ -194,6 +194,83 @@ def test_session_end_preserves_auto_mode_state(project):
     assert (project / ".ucw" / "state" / "auto-mode").exists()
 
 
+# ---- PR E: phase preservation across exit ----------------------------------
+
+def test_session_end_preserves_phase_when_auto_on_and_plan_exists(project):
+    """PR E: exiting mid-build (auto-mode on, plan persisted) is the
+    'free context to resume later' case — phase MUST survive so the
+    UserPromptSubmit resume hint fires on the next session's first prompt."""
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "auto-mode").write_text(
+        json.dumps({"level": 3, "since": "2026-06-01T00:00:00Z"})
+    )
+    (project / ".ucw" / "state" / "plan.md").write_text("1. do x\n")
+    _run("session-end.py", {"cwd": str(project)})
+    assert (project / ".ucw" / "state" / "phase").exists(), \
+        "phase must survive when auto-mode is on and plan.md exists"
+    assert (project / ".ucw" / "state" / "phase").read_text().strip() == "build"
+
+
+def test_session_end_clears_phase_when_auto_mode_off(project):
+    """Back-compat: no auto-mode → original 'end of session = end of work'
+    semantics → phase clears."""
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "plan.md").write_text("1. do x\n")
+    # No auto-mode state
+    _run("session-end.py", {"cwd": str(project)})
+    assert not (project / ".ucw" / "state" / "phase").exists()
+
+
+def test_session_end_clears_phase_when_no_plan(project):
+    """Auto-mode on but no plan → not really mid-workflow → clear phase."""
+    (project / ".ucw" / "state" / "phase").write_text("scope")
+    (project / ".ucw" / "state" / "auto-mode").write_text(
+        json.dumps({"level": 2})
+    )
+    # No plan.md
+    _run("session-end.py", {"cwd": str(project)})
+    assert not (project / ".ucw" / "state" / "phase").exists()
+
+
+def test_session_end_clears_streak_and_retries_even_when_preserving_phase(project):
+    """Only phase is conditional. edit-streak and auto-retries always clear
+    (streak is per-session momentum; retries reset for the next build)."""
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "auto-mode").write_text(json.dumps({"level": 2}))
+    (project / ".ucw" / "state" / "plan.md").write_text("1. do x\n")
+    (project / ".ucw" / "state" / "edit-streak").write_text("4")
+    (project / ".ucw" / "state" / "auto-retries").write_text("2")
+    _run("session-end.py", {"cwd": str(project)})
+    assert (project / ".ucw" / "state" / "phase").exists()
+    assert not (project / ".ucw" / "state" / "edit-streak").exists()
+    assert not (project / ".ucw" / "state" / "auto-retries").exists()
+
+
+def test_session_end_logs_phase_preservation(project):
+    """Sanity: when we preserve phase, the action is logged for traceability."""
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "auto-mode").write_text(json.dumps({"level": 2}))
+    (project / ".ucw" / "state" / "plan.md").write_text("1. do x\n")
+    _run("session-end.py", {"cwd": str(project)})
+    log = (project / ".ucw" / "hooks.log").read_text()
+    assert "phase preserved" in log
+
+
+def test_session_end_env_off_auto_mode_clears_phase(project):
+    """UCW_AUTO_MODE=off env wins over state → phase clears (escape hatch)."""
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "auto-mode").write_text(json.dumps({"level": 3}))
+    (project / ".ucw" / "state" / "plan.md").write_text("1. do x\n")
+    env = {**os.environ, "UCW_AUTO_MODE": "off"}
+    cp = subprocess.run(
+        [sys.executable, str(HOOKS / "session-end.py")],
+        input=json.dumps({"cwd": str(project)}),
+        capture_output=True, text=True, env=env, timeout=10,
+    )
+    assert cp.returncode == 0
+    assert not (project / ".ucw" / "state" / "phase").exists()
+
+
 # ---- pre-compact -------------------------------------------------------------
 
 def test_pre_compact_writes_digest(project):
