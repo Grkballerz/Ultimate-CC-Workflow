@@ -1,6 +1,6 @@
 ---
 description: UCW root command. All UCW workflows live under here as subcommands to avoid colliding with Claude Code built-ins (/plan, /init, /review are reserved).
-argument-hint: "<subcommand> [args]   |   status | init | plan | ship | review | audit | recall | pin | scribe | distill | dashboard | watch | unwatch | worktree | phase | prefs | help"
+argument-hint: "<subcommand> [args]   |   status | init | plan | ship | review | audit | recall | pin | scribe | distill | dashboard | watch | unwatch | worktree | phase | prefs | auto | help"
 ---
 
 Arguments: $ARGUMENTS
@@ -30,6 +30,7 @@ ucw <sub> [args...]
   unwatch <PR>        stop watching
   worktree <subcmd>   create | list | cleanup | remove (multi-agent fan-out)
   phase <subcmd>      get | set <name> | clear
+  auto <subcmd>       on [level] | off | status — autonomous run mode
 ```
 
 ---
@@ -68,12 +69,21 @@ Same as `init` but restricted to the listed preference categories
 
 Goal: the rest of $ARGUMENTS after `plan`.
 
-1. Set phase: `$HOME/.claude/ucw/bin/ucw-phase.py set scope`
-2. Invoke the **planner** subagent for the Scope phase. Wait for user approval.
-3. On approval: `$HOME/.claude/ucw/bin/ucw-phase.py set plan` and planner runs the Plan phase.
-4. On approval: `$HOME/.claude/ucw/bin/ucw-phase.py set build` and write the final task list to `.ucw/state/plan.md`.
+1. Check auto-mode: `AUTO_LEVEL=$($HOME/.claude/ucw/bin/ucw-auto.py level)`
+2. Set phase: `$HOME/.claude/ucw/bin/ucw-phase.py set scope`
+3. Invoke the **planner** subagent for the Scope phase.
+   - If `AUTO_LEVEL >= 1`: planner auto-accepts its own spec and proceeds
+     immediately to the Plan phase. Print the spec for transparency but do
+     NOT pause for AskUserQuestion.
+   - Otherwise: wait for explicit user approval before proceeding.
+4. `$HOME/.claude/ucw/bin/ucw-phase.py set plan` and planner runs the Plan phase.
+   - If `AUTO_LEVEL >= 1`: same — auto-accept the plan, print it, advance.
+   - Otherwise: wait for approval.
+5. `$HOME/.claude/ucw/bin/ucw-phase.py set build` and write the final task list to `.ucw/state/plan.md`.
 
-Do not proceed to Build until both Scope and Plan are user-approved.
+In normal mode (`AUTO_LEVEL == 0`) do not proceed to Build until both Scope
+and Plan are user-approved. Auto-mode level 1+ removes both gates so the
+agent can run end-to-end through Build unattended.
 
 ---
 
@@ -202,6 +212,27 @@ Forward to `$HOME/.claude/ucw/bin/ucw-worktree.py <subcmd> [args]`.
 ## phase <get | set <name> | clear>
 
 Forward to `$HOME/.claude/ucw/bin/ucw-phase.py <subcmd> [args]`.
+
+---
+
+## auto <on [level] | off | status | level>
+
+Forward to `$HOME/.claude/ucw/bin/ucw-auto.py <subcmd> [args]`.
+
+Levels are cumulative — each adds to the prior:
+
+- **1** — planner auto-accepts its own spec/plan (no AskUserQuestion gates)
+- **2** — Stop hook retry loop on verify failure (cap 3 by default)
+- **3** — auto-commit + auto-push when verify passes
+- **4** — auto-open draft PR + subscribe to PR activity for CI autofix
+
+`/ucw auto on` with no number defaults to level 4 (full autonomy).
+`/ucw auto off` clears the state file. `UCW_AUTO_MODE=off` env var
+short-circuits everything regardless of state — escape hatch if the agent
+goes wrong and you need to stop it now without finding the right file.
+
+After enabling, print the level + a one-line warning about what's being
+delegated. After disabling, print confirmation.
 
 ---
 
