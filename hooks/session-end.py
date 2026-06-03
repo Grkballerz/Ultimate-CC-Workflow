@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, read_payload, state_file, ucw_dir
+from _hook_common import auto_mode_level, log, read_payload, state_file, ucw_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "memory"))
@@ -77,13 +77,28 @@ def _reset_state(payload: dict) -> None:
     # counter from yesterday's failed retry loop poisons today's first failure.
     # `auto-mode` itself is intentionally NOT cleared — it's user intent that
     # should survive across sessions.
-    for name in ("edit-streak", "phase", "auto-retries"):
+    #
+    # `phase` is conditionally preserved (PR E): when auto-mode is on AND
+    # `.ucw/state/plan.md` exists, the user is mid-workflow and is exiting to
+    # free context, not to call it a day. Clearing phase in that case would
+    # silently disable the UserPromptSubmit resume hint (which gates on
+    # phase). When auto-mode is off OR there's no plan, we keep the original
+    # "end of session = end of work" semantics and clear phase too.
+    always_clear = ["edit-streak", "auto-retries"]
+    preserve_phase = (
+        auto_mode_level(payload) > 0
+        and state_file(payload, "plan.md").exists()
+    )
+    targets = always_clear if preserve_phase else [*always_clear, "phase"]
+    for name in targets:
         sf = state_file(payload, name)
         if sf.exists():
             try:
                 sf.unlink()
             except OSError:
                 pass
+    if preserve_phase:
+        log(payload, "SessionEnd: phase preserved (auto-mode on + plan.md present)")
 
 
 def _append_session_log(payload: dict, jobs: int, facts: int) -> None:

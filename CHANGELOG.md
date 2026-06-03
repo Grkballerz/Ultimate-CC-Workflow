@@ -5,6 +5,54 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Changed — SessionEnd preserves phase across exit when mid-workflow (PR E)
+
+Tightens PR D's clear-and-continue support to cover the exit+restart case
+too. Previously, `/clear` worked smoothly post-PR-D (no SessionEnd fires)
+but exiting Claude Code wiped `.ucw/state/phase` — on restart, the
+auto-injected resume hint wouldn't fire (it gates on phase) and the
+agent had artifacts but no state-machine position.
+
+PR E changes `hooks/session-end.py::_reset_state()` to **preserve phase**
+when both:
+- auto-mode is on (`bin/ucw-auto.py`-resolved level > 0), AND
+- `.ucw/state/plan.md` exists (work in progress)
+
+Either condition false → original behavior (clear phase, end of work).
+`UCW_AUTO_MODE=off` env var still wins as the escape hatch.
+
+`edit-streak` and `auto-retries` continue to clear unconditionally —
+streak is per-session momentum, retries are a per-build budget that
+should reset.
+
+6 new tests in `tests/test_hooks_more.py` cover:
+- phase preserved when auto-on + plan present (the resume case)
+- phase still cleared when auto off (back-compat)
+- phase still cleared when no plan.md (not really mid-workflow)
+- streak + retries still clear even when preserving phase
+- preservation is logged for traceability
+- env-var off short-circuit still wipes phase
+
+530 tests passing (was 524).
+
+**End user impact.** After PR E, this flow works:
+
+```
+# Today
+/ucw auto on
+/ucw plan add /healthz endpoint
+# (build, edit, ...)
+
+# Exit Claude Code, close laptop, come back tomorrow
+# Restart Claude Code
+
+# Next prompt:
+"continue"
+# → UserPromptSubmit fires, sees phase=`build` still set,
+#   injects resume hint pointing at plan.md + spec.md
+# Agent picks up where it left off.
+```
+
 ### Added — clear-and-continue support (PR D)
 
 Closes four real gaps the user surfaced when asking "will `/clear` and
