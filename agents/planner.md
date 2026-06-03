@@ -16,6 +16,28 @@ Output:
 - 3-5 bullet success criteria (testable / observable)
 - Risks / unknowns
 
+**Persist the spec.** Before the approval gate, write the scope output to
+`.ucw/state/spec.md` in this format:
+
+```markdown
+# Spec: <goal in 5-10 words>
+
+<one paragraph>
+
+## Success criteria
+
+- ...
+- ...
+
+## Risks / unknowns
+
+- ...
+```
+
+This is what `/ucw resume` reads after a `/clear` or `/compact` so the
+agent picks up the goal without re-asking. Without it, post-clear commits
+get vague.
+
 **Approval gate.** Run `$HOME/.claude/ucw/bin/ucw-auto.py level` and read
 the integer:
 - `0` (off, default): block on user approval before proceeding.

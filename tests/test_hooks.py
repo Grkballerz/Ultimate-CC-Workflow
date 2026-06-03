@@ -153,3 +153,85 @@ def test_user_prompt_submit_no_match_no_output(project):
         "prompt": "Hello there.",
     })
     assert out == ""
+
+
+def test_user_prompt_submit_injects_resume_hint_when_phase_set(project):
+    """PR D: when workflow state is in flight, every prompt gets a small
+    resume hint prepended so the agent re-orients after /clear."""
+    (project / ".ucw" / "state" / "phase").write_text("build\n")
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project),
+        "prompt": "Hello there.",  # no keyword match — hint is the only injection
+    })
+    body = json.loads(out)
+    ctx = body["hookSpecificOutput"]["additionalContext"]
+    assert "UCW resume" in ctx
+    assert "phase=`build`" in ctx
+    assert "/ucw resume" in ctx
+
+
+def test_user_prompt_submit_no_resume_hint_without_phase(project):
+    """No phase → no hint. Mostly defends against polluting clean projects."""
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project),
+        "prompt": "Hello there.",
+    })
+    assert out == ""
+
+
+def test_user_prompt_submit_resume_hint_with_auto_mode(project):
+    (project / ".ucw" / "state" / "phase").write_text("build\n")
+    (project / ".ucw" / "state" / "auto-mode").write_text(
+        json.dumps({"level": 3, "since": "2026-06-01T00:00:00Z"})
+    )
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project),
+        "prompt": "do the next step",
+    })
+    body = json.loads(out)
+    ctx = body["hookSpecificOutput"]["additionalContext"]
+    assert "auto-mode=L3" in ctx
+
+
+def test_user_prompt_submit_resume_hint_with_retry_budget(project):
+    (project / ".ucw" / "state" / "phase").write_text("build\n")
+    (project / ".ucw" / "state" / "auto-mode").write_text(
+        json.dumps({"level": 2})
+    )
+    (project / ".ucw" / "state" / "auto-retries").write_text("1")
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project),
+        "prompt": "do the next step",
+    })
+    body = json.loads(out)
+    ctx = body["hookSpecificOutput"]["additionalContext"]
+    assert "retries 1/3" in ctx
+
+
+def test_user_prompt_submit_resume_hint_then_knowledge(project):
+    """When both fire, hint comes first so it's not buried beneath knowledge."""
+    (project / ".ucw" / "state" / "phase").write_text("build\n")
+    knowledge = project / ".ucw" / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "STACK.md").write_text("# Stack\n- python\n")
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project),
+        "prompt": "what version of python is on the stack?",
+    })
+    body = json.loads(out)
+    ctx = body["hookSpecificOutput"]["additionalContext"]
+    assert ctx.index("UCW resume") < ctx.index("STACK.md")
+
+
+def test_user_prompt_submit_resume_hint_points_to_plan_and_spec_when_present(project):
+    (project / ".ucw" / "state" / "phase").write_text("build\n")
+    (project / ".ucw" / "state" / "plan.md").write_text("# Plan\n")
+    (project / ".ucw" / "state" / "spec.md").write_text("# Spec\n")
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project),
+        "prompt": "next step",
+    })
+    body = json.loads(out)
+    ctx = body["hookSpecificOutput"]["additionalContext"]
+    assert ".ucw/state/plan.md" in ctx
+    assert ".ucw/state/spec.md" in ctx

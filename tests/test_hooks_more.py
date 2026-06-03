@@ -176,6 +176,24 @@ def test_session_end_clears_state(project):
     assert not (project / ".ucw" / "state" / "edit-streak").exists()
 
 
+def test_session_end_clears_auto_retries(project):
+    """PR D fix: auto-retries counter must clear on SessionEnd so a counter
+    from yesterday's failed retry loop doesn't poison today's first failure
+    (cap exhausted on the first real failure)."""
+    (project / ".ucw" / "state" / "auto-retries").write_text("2")
+    _run("session-end.py", {"cwd": str(project)})
+    assert not (project / ".ucw" / "state" / "auto-retries").exists()
+
+
+def test_session_end_preserves_auto_mode_state(project):
+    """Auto-mode itself is user intent — must survive across sessions."""
+    (project / ".ucw" / "state" / "auto-mode").write_text(
+        json.dumps({"level": 3, "since": "2026-06-01T00:00:00Z"})
+    )
+    _run("session-end.py", {"cwd": str(project)})
+    assert (project / ".ucw" / "state" / "auto-mode").exists()
+
+
 # ---- pre-compact -------------------------------------------------------------
 
 def test_pre_compact_writes_digest(project):
@@ -188,6 +206,53 @@ def test_pre_compact_writes_digest(project):
     assert "build" in text
     assert "4" in text
     assert "manual" in text
+
+
+def test_pre_compact_digest_includes_auto_mode_state(project):
+    """PR D: digest must capture auto-mode level + retry count so the agent
+    can see them post-compact via /ucw resume or the auto-injected hint."""
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "auto-mode").write_text(
+        json.dumps({"level": 3, "since": "2026-06-01T00:00:00Z"})
+    )
+    (project / ".ucw" / "state" / "auto-retries").write_text("1")
+    _run("pre-compact.py", {"cwd": str(project), "trigger": "manual"})
+    digest = project / ".ucw" / "state" / "pre-compact-digest.md"
+    text = digest.read_text()
+    assert "level 3" in text
+    assert "retries 1/3" in text
+
+
+def test_pre_compact_digest_off_when_no_auto_mode(project):
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    _run("pre-compact.py", {"cwd": str(project), "trigger": "manual"})
+    digest = project / ".ucw" / "state" / "pre-compact-digest.md"
+    text = digest.read_text()
+    assert "Auto-mode at compact: off" in text
+
+
+def test_pre_compact_digest_notes_plan_and_spec_presence(project):
+    """Digest must point at plan.md and spec.md so the agent can read them
+    if it wants the full context post-compact."""
+    (project / ".ucw" / "state" / "phase").write_text("plan")
+    (project / ".ucw" / "state" / "plan.md").write_text("# Plan\n1. do x\n")
+    (project / ".ucw" / "state" / "spec.md").write_text("# Spec\n\nbuilding x\n")
+    _run("pre-compact.py", {"cwd": str(project), "trigger": "manual"})
+    digest = project / ".ucw" / "state" / "pre-compact-digest.md"
+    text = digest.read_text()
+    assert "Plan persisted: yes" in text
+    assert "Spec persisted: yes" in text
+    assert "/ucw resume" in text
+
+
+def test_pre_compact_digest_marks_missing_plan_and_spec(project):
+    """Make missing state explicit in the digest."""
+    (project / ".ucw" / "state" / "phase").write_text("scope")
+    _run("pre-compact.py", {"cwd": str(project), "trigger": "manual"})
+    digest = project / ".ucw" / "state" / "pre-compact-digest.md"
+    text = digest.read_text()
+    assert "Plan persisted: no" in text
+    assert "Spec persisted: no" in text
 
 
 # ---- subagent-stop -----------------------------------------------------------

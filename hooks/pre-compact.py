@@ -15,7 +15,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, read_payload, state_file
+from _hook_common import (
+    auto_mode_level,
+    auto_retry_cap,
+    log,
+    read_payload,
+    state_file,
+)
 
 
 def main() -> int:
@@ -29,13 +35,35 @@ def main() -> int:
     streak_sf = state_file(payload, "edit-streak")
     streak = streak_sf.read_text().strip() if streak_sf.exists() else "0"
 
+    retries_sf = state_file(payload, "auto-retries")
+    retries = retries_sf.read_text().strip() if retries_sf.exists() else "0"
+
+    level = auto_mode_level(payload)
+    cap = auto_retry_cap(payload) if level >= 2 else None
+
+    plan_present = state_file(payload, "plan.md").exists()
+    spec_present = state_file(payload, "spec.md").exists()
+
+    if level:
+        auto_line = (
+            f"- Auto-mode at compact: level {level}"
+            + (f" (retries {retries}/{cap})" if cap else "")
+        )
+    else:
+        auto_line = "- Auto-mode at compact: off"
+
     try:
         digest.write_text(
             f"# Pre-compact digest\n\n"
             f"- Timestamp: {time.strftime('%Y-%m-%dT%H:%M:%S')}\n"
             f"- Phase at compact: {phase}\n"
             f"- Edit streak at compact: {streak}\n"
-            f"- Trigger: {payload.get('trigger', 'unknown')}\n",
+            f"- Trigger: {payload.get('trigger', 'unknown')}\n"
+            f"{auto_line}\n"
+            f"- Plan persisted: {'yes (`.ucw/state/plan.md`)' if plan_present else 'no'}\n"
+            f"- Spec persisted: {'yes (`.ucw/state/spec.md`)' if spec_present else 'no'}\n"
+            f"\n"
+            f"Run `/ucw resume` post-compact for the full block.\n",
             encoding="utf-8",
         )
         log(payload, "wrote pre-compact digest")
