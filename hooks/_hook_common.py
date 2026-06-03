@@ -52,3 +52,59 @@ def log(payload: dict[str, Any], message: str) -> None:
 def state_file(payload: dict[str, Any], name: str) -> Path:
     """Path under .ucw/state/. Caller is responsible for mkdir if writing."""
     return ucw_dir(payload) / "state" / name
+
+
+# ---- auto-mode helpers ----------------------------------------------------
+# Inlined rather than imported from bin/ucw-auto.py because (a) bin/ is a
+# CLI shipping with a hyphen in the name (not importable) and (b) hooks
+# should stay self-contained for testability. Schema must match the file
+# bin/ucw-auto.py writes; tests in test_auto_mode_integration.py guard
+# against drift.
+
+_VALID_AUTO_LEVELS = (1, 2, 3, 4)
+
+
+def auto_mode_level(payload: dict[str, Any]) -> int:
+    """Return the current auto-mode level (0 = off).
+
+    Resolution order: UCW_AUTO_MODE env → .ucw/state/auto-mode → 0.
+    """
+    env = os.environ.get("UCW_AUTO_MODE", "").strip().lower()
+    if env in {"0", "off", "no", "false"}:
+        return 0
+    if env.isdigit() and int(env) in _VALID_AUTO_LEVELS:
+        return int(env)
+    if env == "on":
+        return 4
+    sf = state_file(payload, "auto-mode")
+    if not sf.exists():
+        return 0
+    try:
+        import json
+        data = json.loads(sf.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0
+    level = data.get("level")
+    if isinstance(level, int) and level in _VALID_AUTO_LEVELS:
+        return level
+    return 0
+
+
+def auto_retry_cap(payload: dict[str, Any]) -> int:
+    """Return the retry cap (default 3). Used by Stop hook at level >= 2."""
+    env = os.environ.get("UCW_AUTO_RETRY_CAP", "").strip()
+    if env.isdigit():
+        cap = int(env)
+        if 0 < cap < 100:
+            return cap
+    sf = state_file(payload, "auto-mode")
+    if sf.exists():
+        try:
+            import json
+            data = json.loads(sf.read_text(encoding="utf-8"))
+            cap = data.get("retry_cap")
+            if isinstance(cap, int) and 0 < cap < 100:
+                return cap
+        except (OSError, ValueError):
+            pass
+    return 3

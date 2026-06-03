@@ -5,6 +5,48 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Added — auto-mode Levels 2 + 3 wired into Stop hook (PR B of 3)
+
+Builds on PR A. Both levels are cumulative — turning on level 3 also gets
+you level 2's retry loop.
+
+**Level 2 — retry loop on verify failure.** Stop hook reads
+`bin/ucw-auto.py level`. When `level >= 2` and verify fails:
+- Increment `.ucw/state/auto-retries`
+- Block with `AUTO (retry N/cap): <failure summary>` — same effect as the
+  old hard block, but the agent now sees a retry budget
+- At cap (default 3, configurable via `--retry-cap` or
+  `UCW_AUTO_RETRY_CAP`), reset the counter and fall back to a hard block
+  with `retry cap exhausted — fix manually` so the human takes over
+
+On verify pass, the retry counter clears.
+
+**Level 3 — auto-commit + push on green.** When `level >= 3` and verify
+passes, instead of silently allowing Stop, the hook blocks with
+`AUTO (level N): verify passed. Running /ucw ship now …`. The block is the
+*carrier* for the instruction — without it the agent would Stop and wait
+for the next prompt. `/ucw ship` then reads the same level and skips its
+user-confirm gate before committing + pushing.
+
+**Schema compliance.** Both new code paths emit top-level
+`decision + reason` only — never `hookSpecificOutput` on Stop. Locked in
+by `test_level_*_block_has_no_hookSpecificOutput` cases.
+
+**Drift guard.** `bin/ucw-auto.py` and `hooks/_hook_common.py` each have
+their own state-reading code (the CLI vs. self-contained hooks). Five new
+tests (`test_hook_helper_matches_bin_*`) assert they agree on every
+input — off, on, each level, env override, malformed state.
+
+PR B ships:
+- `hooks/_hook_common.py` — `auto_mode_level()` + `auto_retry_cap()` helpers
+- `hooks/stop.py` — retry-counter helpers, level 2/3 branches in `main()`
+- `agents/`/`commands/ucw.md` — `ship` checks auto level and skips user
+  confirm at level 3+
+- 21 new tests (16 Stop-hook behavior + 5 drift-guard) — 472 total
+
+PR C lands Level 4: auto-PR creation + `subscribe_pr_activity` for CI
+autofix.
+
 ### Added — auto-mode foundation + Level 1 plan auto-accept (PR A of 3)
 
 `/ucw auto on [level]` puts UCW into autonomous mode. Levels are cumulative:

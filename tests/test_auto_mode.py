@@ -244,3 +244,58 @@ def test_state_persisted_to_dot_ucw_state(project):
     body = json.loads(state.read_text())
     assert body["level"] == 4
     assert "since" in body
+
+
+# ---- drift guard: bin/ucw-auto.py and hooks/_hook_common.py must agree -----
+# Both have their own copy of the state-reading logic (bin/ for the CLI,
+# hooks/ for self-contained hook scripts). These tests ensure they agree on
+# the same inputs, so a future change to one without the other gets caught.
+
+def _hook_level(project: Path, env_extra: dict | None = None) -> int:
+    """Import hooks/_hook_common from the repo and call auto_mode_level."""
+    spec = importlib.util.spec_from_file_location(
+        "hook_common", REPO_ROOT / "hooks" / "_hook_common.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    payload = {"cwd": str(project)}
+    if env_extra:
+        for k, v in env_extra.items():
+            os.environ[k] = v
+    try:
+        return mod.auto_mode_level(payload)
+    finally:
+        if env_extra:
+            for k in env_extra:
+                os.environ.pop(k, None)
+
+
+def test_hook_helper_matches_bin_on_off(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_MODE", raising=False)
+    assert _hook_level(project) == ucw_auto.current_level(project) == 0
+
+
+def test_hook_helper_matches_bin_on_each_level(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_MODE", raising=False)
+    for level in (1, 2, 3, 4):
+        (project / ".ucw" / "state" / "auto-mode").write_text(
+            json.dumps({"level": level})
+        )
+        assert _hook_level(project) == ucw_auto.current_level(project) == level
+
+
+def test_hook_helper_matches_bin_on_env_off(project, monkeypatch):
+    (project / ".ucw" / "state" / "auto-mode").write_text(json.dumps({"level": 4}))
+    monkeypatch.setenv("UCW_AUTO_MODE", "off")
+    assert _hook_level(project) == ucw_auto.current_level(project) == 0
+
+
+def test_hook_helper_matches_bin_on_env_level(project, monkeypatch):
+    monkeypatch.setenv("UCW_AUTO_MODE", "2")
+    assert _hook_level(project) == ucw_auto.current_level(project) == 2
+
+
+def test_hook_helper_matches_bin_on_malformed_state(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_MODE", raising=False)
+    (project / ".ucw" / "state" / "auto-mode").write_text("not json")
+    assert _hook_level(project) == ucw_auto.current_level(project) == 0

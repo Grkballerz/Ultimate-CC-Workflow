@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Stop hook — fires when Claude finishes a turn.
 
-Three jobs:
+Four jobs:
 1. **Memory distillation**: queue the transcript for distillation on SessionEnd.
 2. **Auto-verify-on-Stop**: if `.ucw/state/phase == build` and streak > 0,
    shell out to `bin/ucw-verify.py` and:
      - on pass → clear the streak, set phase=verify, allow Stop
      - on fail → block with the failure summary in `reason`
      - on timeout → block with hint to set UCW_VERIFY_TIMEOUT or skip
-   This replaces the old "block + tell user to run /ucw ship" behavior. The
-   user can still run `/ucw ship` to also review + commit + push; auto-verify
-   just unblocks Stop when tests pass.
-3. **Skip override**: `UCW_SKIP_AUTO_VERIFY=1` falls back to the old blocking
+3. **Auto-mode retry + ship** (PR B):
+     - level >= 2 + verify fail: bump retry counter, block with retry
+       message until cap exhausted, then fall back to hard block.
+     - level >= 3 + verify pass: block with "running /ucw ship now" so the
+       agent immediately commits + pushes without manual review. The
+       "block" is the carrier for the instruction — without it the agent
+       would Stop and wait for the next prompt.
+4. **Skip override**: `UCW_SKIP_AUTO_VERIFY=1` falls back to the old blocking
    behavior (useful when tests are very slow or need orchestration the hook
    can't do — e.g. docker-compose up first).
 """
@@ -25,7 +29,15 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, project_root, read_payload, state_file, write_output
+from _hook_common import (
+    auto_mode_level,
+    auto_retry_cap,
+    log,
+    project_root,
+    read_payload,
+    state_file,
+    write_output,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -66,6 +78,36 @@ def _set_phase(payload: dict, phase: str) -> None:
         sf.write_text(phase + "\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def _retry_count(payload: dict) -> int:
+    sf = state_file(payload, "auto-retries")
+    if not sf.exists():
+        return 0
+    try:
+        return int(sf.read_text().strip() or "0")
+    except (OSError, ValueError):
+        return 0
+
+
+def _bump_retry_count(payload: dict) -> int:
+    n = _retry_count(payload) + 1
+    sf = state_file(payload, "auto-retries")
+    sf.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        sf.write_text(str(n), encoding="utf-8")
+    except OSError:
+        pass
+    return n
+
+
+def _reset_retry_count(payload: dict) -> None:
+    sf = state_file(payload, "auto-retries")
+    if sf.exists():
+        try:
+            sf.unlink()
+        except OSError:
+            pass
 
 
 def _queue_distill(payload: dict) -> None:
@@ -168,17 +210,78 @@ def main() -> int:
         log(payload, "auto-verify skipped (no runner) — allowing Stop")
         return 0
 
+    level = auto_mode_level(payload)
+
     if result.get("passed"):
-        # Tests pass → allow Stop. Clear streak so we don't re-trigger and
-        # advance phase to verify (next /ucw ship picks up at the right place).
+        # Tests pass → allow Stop. Clear streak + reset retries so we don't
+        # re-trigger and advance phase to verify (next /ucw ship picks up at
+        # the right place).
         _clear_streak(payload)
+        _reset_retry_count(payload)
         _set_phase(payload, "verify")
+
+        if level >= 3:
+            # Level 3 auto-ship: don't just allow Stop — block with a nudge
+            # so the agent immediately runs /ucw ship (which is also in
+            # auto-mode and will skip the user-confirm gate). The "block"
+            # is the carrier for the instruction; without it the agent
+            # would happily Stop and wait for the next prompt.
+            log(payload, f"auto-mode level {level}: verify passed → nudging /ucw ship")
+            write_output({
+                "decision": "block",
+                "reason": (
+                    f"UCW AUTO (level {level}): verify passed. Running "
+                    f"`/ucw ship` now to commit and push. "
+                    f"(Disable with `/ucw auto off` or UCW_AUTO_MODE=off.)"
+                ),
+            })
         return 0
 
-    # Tests failed (or timed out) → block with concrete summary.
+    # Tests failed (or timed out).
     cmd = result.get("command") or "<no command>"
     elapsed = result.get("elapsed_ms", 0)
     summary = (result.get("summary") or "").strip()
+
+    if level >= 2:
+        # Level 2 retry loop: bump counter, decide whether to keep trying.
+        cap = auto_retry_cap(payload)
+        n = _bump_retry_count(payload)
+        log(payload, f"auto-mode level {level}: verify FAILED, retry {n}/{cap}")
+        if n >= cap:
+            # Cap exhausted — fall back to a hard block. Reset the counter
+            # so the next session starts fresh once the human fixes it.
+            _reset_retry_count(payload)
+            excerpt = summary[-800:] if summary else "(no test output captured)"
+            reason = (
+                f"UCW AUTO (level {level}): retry cap {cap} exhausted on "
+                f"`{cmd}` (exit {result.get('exit_code')}, {elapsed}ms). "
+                f"Fix manually, then re-enable with `/ucw auto on` if "
+                f"you want autonomy back. To raise the cap: "
+                f"`/ucw auto on {level} --retry-cap N` or UCW_AUTO_RETRY_CAP=N.\n\n"
+                f"{excerpt}"
+            )
+            write_output({"decision": "block", "reason": reason})
+            return 0
+        # Within budget — block with the failure so the agent retries.
+        if result.get("timed_out"):
+            reason = (
+                f"UCW AUTO (retry {n}/{cap}): `{cmd}` TIMED OUT after "
+                f"{elapsed}ms. Fix the slowness or raise UCW_VERIFY_TIMEOUT, "
+                f"then continue."
+            )
+        else:
+            excerpt = summary[-1000:] if summary else "(no test output captured)"
+            reason = (
+                f"UCW AUTO (retry {n}/{cap}): `{cmd}` failed "
+                f"(exit {result.get('exit_code')}, {elapsed}ms). Fix the "
+                f"failures below and continue — auto-mode will keep "
+                f"verifying until tests pass or the cap is hit.\n\n"
+                f"{excerpt}"
+            )
+        write_output({"decision": "block", "reason": reason})
+        return 0
+
+    # Level 0 / 1 — existing hard-block behavior on failure.
     if result.get("timed_out"):
         reason = (
             f"UCW auto-verify: `{cmd}` TIMED OUT after {elapsed}ms. "
@@ -186,7 +289,6 @@ def main() -> int:
             f"or set UCW_SKIP_AUTO_VERIFY=1 and run `/ucw ship` manually."
         )
     else:
-        # Keep reason readable in the CC UI — surface the last failing chunk.
         excerpt = summary[-1200:] if summary else "(no test output captured)"
         reason = (
             f"UCW auto-verify FAILED — `{cmd}` (exit {result.get('exit_code')}, "

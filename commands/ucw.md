@@ -89,17 +89,21 @@ agent can run end-to-end through Build unattended.
 
 ## ship [--no-push | --pr]
 
-1. Phase: `$HOME/.claude/ucw/bin/ucw-phase.py set verify`
-2. Invoke the **verifier** subagent. Block on any gate failure.
-3. Invoke the **reviewer** subagent against the diff. Block on critical findings.
-4. If both pass: `$HOME/.claude/ucw/bin/ucw-phase.py set land`
+1. Check auto-mode: `AUTO_LEVEL=$($HOME/.claude/ucw/bin/ucw-auto.py level)`
+2. Phase: `$HOME/.claude/ucw/bin/ucw-phase.py set verify`
+3. Invoke the **verifier** subagent. Block on any gate failure.
+4. Invoke the **reviewer** subagent against the diff. Block on critical findings.
+5. If both pass: `$HOME/.claude/ucw/bin/ucw-phase.py set land`
+   - **At AUTO_LEVEL < 3**: confirm with user before committing
+     (`AskUserQuestion` summarizing the diff + commit message).
+   - **At AUTO_LEVEL >= 3**: skip confirmation — proceed directly to commit.
    - `git add -A` (or specific files from `.ucw/state/plan.md`)
    - `git commit` with a message derived from the plan + key tasks
    - Unless `--no-push`: `git push -u origin HEAD`
-   - If `--pr`: open a PR via `mcp__github__create_pull_request`
-5. Invoke the **scribe** subagent on the just-made diff.
-6. `$HOME/.claude/ucw/bin/ucw-phase.py clear`
-7. Print the commit SHA + Knowledge files that changed.
+   - If `--pr` OR `AUTO_LEVEL >= 4`: open a PR via `mcp__github__create_pull_request` (PR C wires the full level-4 flow)
+6. Invoke the **scribe** subagent on the just-made diff.
+7. `$HOME/.claude/ucw/bin/ucw-phase.py clear`
+8. Print the commit SHA + Knowledge files that changed.
 
 ---
 
