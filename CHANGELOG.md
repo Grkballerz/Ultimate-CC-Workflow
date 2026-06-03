@@ -5,6 +5,82 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Added — clear-and-continue support (PR D)
+
+Closes four real gaps the user surfaced when asking "will `/clear` and
+`/ucw ship` work?" after the auto-mode series shipped.
+
+**1. Spec persistence.** `agents/planner.md` now writes the scope-phase
+output (one paragraph + success criteria + risks) to
+`.ucw/state/spec.md` before the approval gate. Previously only the plan
+task list survived — commit messages went vague after `/clear`. Now the
+agent can re-read the goal from disk.
+
+**2. `auto-retries` leak fixed.** `hooks/session-end.py::_reset_state()`
+now also clears `.ucw/state/auto-retries`. PR B introduced this counter
+but forgot to wire it into SessionEnd — a counter from yesterday's
+failed retry loop would poison today's first failure. Two regression
+tests lock the fix (the leak case + verifies `.ucw/state/auto-mode`
+itself is correctly preserved as user intent).
+
+**3. Pre-compact digest extended.** `hooks/pre-compact.py` now includes
+`auto_mode` level + retry budget, plus pointers to `plan.md` /
+`spec.md` if persisted, plus a `Run /ucw resume post-compact …` line.
+The digest is now actually consumable instead of being dead data.
+
+**4. Auto-resume injection.** `hooks/user-prompt-submit.py` gets a new
+branch that prepends a compact resume hint (~150 chars) when
+`.ucw/state/phase` exists. Format:
+
+```
+## UCW resume
+
+Workflow state in progress: phase=`build`, auto-mode=L3 (retries 1/3).
+Plan/spec at `.ucw/state/plan.md`, `.ucw/state/spec.md`. Run
+`/ucw resume` for the full block, or `/ucw status` for the dashboard view.
+```
+
+The hint comes first in `additionalContext` so it isn't buried beneath
+any matched Knowledge docs. Cost: a few tokens per prompt when workflow
+is mid-flight; zero when phase isn't set.
+
+**5. `bin/ucw-resume.py` + `/ucw resume` command.** New helper that
+renders a full markdown re-orientation block: phase, auto-mode level +
+since + retry budget, persisted spec, persisted plan, HEAD commit +
+branch, dirty-tree warning when auto-mode is on AND phase is `land`
+(catches "crashed mid-ship" leaving uncommitted WIP), Knowledge file
+inventory, and the most recent pre-compact digest. Truncates plan/spec
+to configurable byte budgets (default 3 KB / 1.5 KB) so it fits in a
+single `additionalContext`.
+
+**Test count.** 524 passing (+ 1 xfail), up from 489 — 35 new tests:
+
+- `tests/test_resume.py` (23) — render output for every field, byte-limit
+  truncation, env override precedence, git probes (HEAD / branch /
+  dirty), dirty-tree warning gating (auto-on AND phase=land), non-git
+  fallback, sub-directory project-root resolution
+- `tests/test_hooks_more.py` (5) — auto-retries leak fix, auto-mode
+  preservation across SessionEnd, pre-compact digest with auto-mode
+  state, digest plan/spec presence markers
+- `tests/test_hooks.py` (5) — UserPromptSubmit resume hint injection
+  with/without phase, with auto-mode, with retry budget, ordering
+  before Knowledge docs, plan/spec pointers
+
+**Behavioral contract.** After PR D:
+
+```
+/ucw auto on                              # level 4
+/ucw plan add /healthz endpoint           # planner persists spec.md
+# (build, edit, ...)
+/compact                                  # PreCompact captures auto-mode + retries
+"continue"                                # UserPromptSubmit auto-injects resume hint
+/ucw resume                               # full block on demand
+/ucw ship                                 # works as before — hooks drive from disk
+```
+
+End of session: `auto-retries` is cleared. New session: clean retry
+budget; `auto-mode` itself preserved.
+
 ### Added — auto-mode Level 4: auto-PR + watch CI (PR C of 3 — series complete)
 
 `/ucw auto on` (which defaults to level 4) now drives the entire workflow

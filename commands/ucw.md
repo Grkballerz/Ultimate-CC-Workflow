@@ -31,6 +31,7 @@ ucw <sub> [args...]
   worktree <subcmd>   create | list | cleanup | remove (multi-agent fan-out)
   phase <subcmd>      get | set <name> | clear
   auto <subcmd>       on [level] | off | status — autonomous run mode
+  resume              print resume block after /clear or /compact
 ```
 
 ---
@@ -227,6 +228,23 @@ Forward to `$HOME/.claude/ucw/bin/ucw-worktree.py <subcmd> [args]`.
 ## phase <get | set <name> | clear>
 
 Forward to `$HOME/.claude/ucw/bin/ucw-phase.py <subcmd> [args]`.
+
+---
+
+## resume
+
+Run `$HOME/.claude/ucw/bin/ucw-resume.py` and print the output verbatim.
+
+This is the post-`/clear` / post-`/compact` re-orientation command. It
+reads `.ucw/state/*` and renders a markdown block with: current phase,
+auto-mode level + since + retry budget, persisted spec, persisted plan,
+HEAD commit + branch, dirty-tree warning (if auto-mode is on and you have
+uncommitted changes in `land` phase — i.e. crashed mid-ship), Knowledge
+file inventory, and the most recent pre-compact digest.
+
+The same hint (much shorter) is auto-injected by `user-prompt-submit.py`
+on every prompt when workflow state is set, so you usually don't need to
+run `resume` explicitly — it's there for when you want the full picture.
 
 ---
 

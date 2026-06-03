@@ -73,7 +73,11 @@ def _drain_distill_queue(payload: dict) -> tuple[int, int]:
 
 
 def _reset_state(payload: dict) -> None:
-    for name in ("edit-streak", "phase"):
+    # `auto-retries` (PR B's retry counter) must clear here too — otherwise a
+    # counter from yesterday's failed retry loop poisons today's first failure.
+    # `auto-mode` itself is intentionally NOT cleared — it's user intent that
+    # should survive across sessions.
+    for name in ("edit-streak", "phase", "auto-retries"):
         sf = state_file(payload, name)
         if sf.exists():
             try:
