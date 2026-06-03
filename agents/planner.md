@@ -16,7 +16,12 @@ Output:
 - 3-5 bullet success criteria (testable / observable)
 - Risks / unknowns
 
-Block on user approval before proceeding.
+**Approval gate.** Run `$HOME/.claude/ucw/bin/ucw-auto.py level` and read
+the integer:
+- `0` (off, default): block on user approval before proceeding.
+- `≥ 1` (auto-mode): print "AUTO: scope accepted (level N), advancing to
+  Plan" and proceed without AskUserQuestion. The user can disable mid-run
+  via `UCW_AUTO_MODE=off` or `/ucw auto off`.
 
 ## Phase 2 — Plan
 
@@ -34,7 +39,9 @@ Format:
 3. [B] Wire route in app        src/app.py               verify: pytest && app starts
 ```
 
-Block on user approval before handing to the implementer.
+**Approval gate.** Same rule as Phase 1: if auto-mode level is 0, block on
+user approval before handing to the implementer; if ≥ 1, print "AUTO: plan
+accepted (level N), handing to implementer" and proceed.
 
 ## What to read before planning
 

@@ -5,6 +5,38 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Added — auto-mode foundation + Level 1 plan auto-accept (PR A of 3)
+
+`/ucw auto on [level]` puts UCW into autonomous mode. Levels are cumulative:
+
+- **1** — planner auto-accepts its own spec + plan (no AskUserQuestion gate)
+- **2** — Stop hook retry loop on verify failure (lands in PR B)
+- **3** — auto-commit + auto-push on green (lands in PR B)
+- **4** — auto-open PR + subscribe to PR activity for CI autofix (PR C)
+
+`/ucw auto on` with no number defaults to **level 4**. `/ucw auto off`
+clears state. `/ucw auto status` prints the current level + retry cap.
+
+**Escape hatch.** Setting `UCW_AUTO_MODE=off` in the environment
+short-circuits everything regardless of state — flip it in one terminal if
+the agent goes wrong and you can't get to a file. `UCW_AUTO_MODE=on`,
+`UCW_AUTO_MODE=2`, etc. also work.
+
+**State** lives at `.ucw/state/auto-mode` as JSON:
+`{"level": N, "since": "<iso>", "retry_cap": <int>}`. Hooks and commands
+call `bin/ucw-auto.py level` (prints the integer) rather than parsing the
+file directly.
+
+PR A ships:
+- `bin/ucw-auto.py` with subcommands `on / off / status / level`
+- `/ucw auto …` wiring in `commands/ucw.md`
+- Planner agent reads the level and skips its two approval gates at ≥ 1
+- 26 tests (`tests/test_auto_mode.py`) — state round-trip, env overrides,
+  retry-cap parsing, malformed-state handling
+
+PR B will wire levels 2 and 3 into the Stop hook and `/ucw ship`. PR C
+will add level 4 (auto-PR + CI watch).
+
 ### Added — PostToolBatch observability (always-on log + opt-in payload capture)
 
 Follow-up to the #8 fix so you can verify in production that the recursive

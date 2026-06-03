@@ -322,6 +322,7 @@ verify_install() {
   local ok=1
   [[ -d "$CLAUDE_HOME/rules/ucw" ]] || { warn "rules dir missing"; ok=0; }
   [[ -L "$UCW_HOME/bin/ucw-audit.py" ]] || { warn "audit helper not linked"; ok=0; }
+  [[ -L "$UCW_HOME/bin/ucw-auto.py" ]] || { warn "auto-mode helper not linked"; ok=0; }
   [[ -L "$CLAUDE_HOME/commands/ucw.md" ]] || { warn "/ucw command not linked"; ok=0; }
   [[ -L "$CLAUDE_HOME/agents/planner.md" ]] || { warn "planner agent not linked"; ok=0; }
   command -v jq >/dev/null 2>&1 || { warn "jq missing — settings merges will fail"; ok=0; }
