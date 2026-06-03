@@ -5,6 +5,51 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Added — auto-mode Level 4: auto-PR + watch CI (PR C of 3 — series complete)
+
+`/ucw auto on` (which defaults to level 4) now drives the entire workflow
+end-to-end. After Level 3 finishes the commit + push, `/ucw ship` at
+level 4 also:
+
+1. Generates deterministic PR metadata via `bin/ucw-pr-meta.py`
+   (title from the commit subject, body from the message + diff stat +
+   test plan placeholder)
+2. Opens a **draft** PR via `mcp__github__create_pull_request` — draft
+   status keeps the human checkpoint cosmetically visible even though
+   the work is autonomous
+3. Subscribes to PR activity via `mcp__github__subscribe_pr_activity` so
+   CI failures and review comments wake the session for autofix —
+   bounded fixes auto-applied, ambiguous comments escalate via
+   `AskUserQuestion`
+
+**Why a separate helper.** Having the PR title/body come from a Python
+helper (instead of the agent improvising every time) makes the output
+deterministic, testable, and inspectable: run `bin/ucw-pr-meta.py`
+yourself to see exactly what auto-mode would post. 17 tests cover the
+title truncation, body sections, diff-stat extraction, branch detection,
+detached HEAD fallback, and the "no commits ahead" early-exit (exit 2).
+
+**Helper interface** (`bin/ucw-pr-meta.py [--base main] [--repo .]`):
+
+```json
+{
+  "title": "<first line of HEAD commit, ≤70 chars, word-boundary safe>",
+  "body":  "<markdown with ## Summary / ## Changes / ## Test plan>",
+  "head_branch": "<current branch>",
+  "base_branch": "main",
+  "commit_sha":  "<HEAD sha>",
+  "diff_stat":   "<git diff --stat output>",
+  "commits_ahead": <int>
+}
+```
+
+Exit codes: 0 ok / 1 git failure / 2 nothing-to-PR (head == base).
+
+The full series — PRs A through C — ships a working autonomous workflow.
+You can now `/ucw auto on`, hand the agent a goal, and walk away: it
+plans, builds, retries on failure, commits, pushes, opens a PR, and
+watches CI. Disable any time with `/ucw auto off` or `UCW_AUTO_MODE=off`.
+
 ### Added — auto-mode Levels 2 + 3 wired into Stop hook (PR B of 3)
 
 Builds on PR A. Both levels are cumulative — turning on level 3 also gets

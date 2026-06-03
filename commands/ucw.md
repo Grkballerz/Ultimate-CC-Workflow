@@ -87,7 +87,7 @@ agent can run end-to-end through Build unattended.
 
 ---
 
-## ship [--no-push | --pr]
+## ship [--no-push | --pr | --base <branch>]
 
 1. Check auto-mode: `AUTO_LEVEL=$($HOME/.claude/ucw/bin/ucw-auto.py level)`
 2. Phase: `$HOME/.claude/ucw/bin/ucw-phase.py set verify`
@@ -100,10 +100,21 @@ agent can run end-to-end through Build unattended.
    - `git add -A` (or specific files from `.ucw/state/plan.md`)
    - `git commit` with a message derived from the plan + key tasks
    - Unless `--no-push`: `git push -u origin HEAD`
-   - If `--pr` OR `AUTO_LEVEL >= 4`: open a PR via `mcp__github__create_pull_request` (PR C wires the full level-4 flow)
-6. Invoke the **scribe** subagent on the just-made diff.
-7. `$HOME/.claude/ucw/bin/ucw-phase.py clear`
-8. Print the commit SHA + Knowledge files that changed.
+6. If `--pr` OR `AUTO_LEVEL >= 4`:
+   a. Generate PR metadata: `META=$($HOME/.claude/ucw/bin/ucw-pr-meta.py --base ${ARG_BASE:-main})`
+      - Exit 0 → use the JSON.
+      - Exit 2 → no commits ahead of base, skip the PR step entirely (log it for the user).
+      - Exit 1 → not a git repo / git failure, log error and continue.
+   b. Call `mcp__github__create_pull_request` with `title`, `body`, `head` = `META.head_branch`,
+      `base` = `META.base_branch`, `draft = true` (so reviewers see "draft" status until
+      the human marks it ready).
+   c. **At AUTO_LEVEL >= 4 only**: call `mcp__github__subscribe_pr_activity` for the new PR
+      so CI failures and review comments wake this session for autopilot fixes. Same
+      contract as `/ucw watch <PR>` — fix bounded issues automatically, AskUserQuestion
+      on ambiguous comments.
+7. Invoke the **scribe** subagent on the just-made diff.
+8. `$HOME/.claude/ucw/bin/ucw-phase.py clear`
+9. Print the commit SHA, the PR URL (if opened), and Knowledge files that changed.
 
 ---
 
