@@ -5,6 +5,52 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Changed — Auto-verify now runs the full gate suite (PR F)
+
+Fixes a longstanding mismatch: the `verifier` subagent's design
+(`agents/verifier.md:13-21`) calls for a five-gate suite (lint → types →
+tests → security → custom), but `bin/ucw-verify.py` — the script the
+Stop hook actually calls for auto-verify — was running ONLY the test
+runner. A project with passing vitest but broken `tsc --noEmit` or
+ESLint would slip through: the hook saw "verify passed", advanced
+`phase=verify`, and at auto-mode level 3 immediately nudged `/ucw ship`
+to push broken code. Users had to manually re-stop the agent.
+
+PR F implements the first three gates (lint, types, tests). Per gate:
+- PREFERENCES.md fields: `linter`, `typechecker`, `test_runner`
+- `make lint` / `make typecheck` / `make test` if the target exists
+- `package.json` scripts: `lint`, `typecheck` (or `tsc`), `test`, run via
+  the detected package manager (pnpm/yarn/bun/npm)
+- Stack-detected defaults (eslint/biome/ruff/clippy/golangci, tsc/mypy/
+  cargo check/go vet, pytest/vitest/jest/...)
+- Else: gate is skipped (transparent — doesn't fail the suite)
+
+Gates run in order, stop at first failure (override with `--all`).
+Output JSON adds `gates: [...]` and `failed_gate: "lint"|"types"|"tests"|null`;
+top-level `command`/`summary`/`exit_code` point at the failing gate (or
+the last passing one) for back-compat with the old single-command shape.
+
+`hooks/stop.py` now names the failing gate in its block message
+(`"UCW AUTO (retry 2/3): lint gate \`make lint\` failed..."`) so the
+agent doesn't waste a retry hunting failures in the wrong file. Lint
+and types failures get the same retry loop as test failures.
+
+New env knobs:
+- `UCW_VERIFY_GATES=tests` — comma-separated subset to opt out of
+  lint/types if a project intentionally skips them.
+- Existing `UCW_VERIFY_TIMEOUT` now applies per-gate (was per-command;
+  semantically identical when only one gate ran).
+
+`knowledge/PREFERENCES.md.tmpl` gains `linter` and `typechecker` rows;
+`bin/ucw-render-knowledge.py` populates them from detected stack data.
+
+18 new tests in `tests/test_verify.py` and `tests/test_hooks_more.py`
+cover: gate detection precedence (prefs > Makefile > package.json >
+stack), template-placeholder rejection, stop-at-first-failure, `--all`
+mode, `--gates`/`UCW_VERIFY_GATES` subset filtering, lint-failure
+blocks Stop, typecheck-failure blocks Stop, all-gates-pass advances
+phase. Full suite: 548 + 1 xfail (was 530).
+
 ### Changed — SessionEnd preserves phase across exit when mid-workflow (PR E)
 
 Tightens PR D's clear-and-continue support to cover the exit+restart case

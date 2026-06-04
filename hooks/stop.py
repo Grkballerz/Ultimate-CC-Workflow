@@ -196,8 +196,13 @@ def main() -> int:
         })
         return 0
 
+    gates_summary = ",".join(
+        f"{g.get('name')}={'pass' if g.get('passed') else 'FAIL'}"
+        for g in (result.get("gates") or [])
+    ) or "<single>"
     log(payload,
         f"auto-verify: passed={result.get('passed')} skipped={result.get('skipped', False)} "
+        f"gates=[{gates_summary}] failed_gate={result.get('failed_gate')!r} "
         f"command={result.get('command')!r} elapsed={result.get('elapsed_ms')}ms "
         f"source={result.get('source')}")
 
@@ -237,24 +242,27 @@ def main() -> int:
             })
         return 0
 
-    # Tests failed (or timed out).
+    # A gate failed (or timed out). Surface WHICH gate so the agent doesn't
+    # waste a retry hunting for failures in the wrong place.
     cmd = result.get("command") or "<no command>"
     elapsed = result.get("elapsed_ms", 0)
     summary = (result.get("summary") or "").strip()
+    gate = result.get("failed_gate") or "verify"
+    gate_label = f"{gate} gate" if gate in {"lint", "types", "tests"} else gate
 
     if level >= 2:
         # Level 2 retry loop: bump counter, decide whether to keep trying.
         cap = auto_retry_cap(payload)
         n = _bump_retry_count(payload)
-        log(payload, f"auto-mode level {level}: verify FAILED, retry {n}/{cap}")
+        log(payload, f"auto-mode level {level}: {gate_label} FAILED, retry {n}/{cap}")
         if n >= cap:
             # Cap exhausted — fall back to a hard block. Reset the counter
             # so the next session starts fresh once the human fixes it.
             _reset_retry_count(payload)
-            excerpt = summary[-800:] if summary else "(no test output captured)"
+            excerpt = summary[-800:] if summary else "(no output captured)"
             reason = (
                 f"UCW AUTO (level {level}): retry cap {cap} exhausted on "
-                f"`{cmd}` (exit {result.get('exit_code')}, {elapsed}ms). "
+                f"{gate_label} `{cmd}` (exit {result.get('exit_code')}, {elapsed}ms). "
                 f"Fix manually, then re-enable with `/ucw auto on` if "
                 f"you want autonomy back. To raise the cap: "
                 f"`/ucw auto on {level} --retry-cap N` or UCW_AUTO_RETRY_CAP=N.\n\n"
@@ -265,17 +273,17 @@ def main() -> int:
         # Within budget — block with the failure so the agent retries.
         if result.get("timed_out"):
             reason = (
-                f"UCW AUTO (retry {n}/{cap}): `{cmd}` TIMED OUT after "
+                f"UCW AUTO (retry {n}/{cap}): {gate_label} `{cmd}` TIMED OUT after "
                 f"{elapsed}ms. Fix the slowness or raise UCW_VERIFY_TIMEOUT, "
                 f"then continue."
             )
         else:
-            excerpt = summary[-1000:] if summary else "(no test output captured)"
+            excerpt = summary[-1000:] if summary else "(no output captured)"
             reason = (
-                f"UCW AUTO (retry {n}/{cap}): `{cmd}` failed "
+                f"UCW AUTO (retry {n}/{cap}): {gate_label} `{cmd}` failed "
                 f"(exit {result.get('exit_code')}, {elapsed}ms). Fix the "
                 f"failures below and continue — auto-mode will keep "
-                f"verifying until tests pass or the cap is hit.\n\n"
+                f"verifying until all gates pass or the cap is hit.\n\n"
                 f"{excerpt}"
             )
         write_output({"decision": "block", "reason": reason})
@@ -284,15 +292,16 @@ def main() -> int:
     # Level 0 / 1 — existing hard-block behavior on failure.
     if result.get("timed_out"):
         reason = (
-            f"UCW auto-verify: `{cmd}` TIMED OUT after {elapsed}ms. "
+            f"UCW auto-verify: {gate_label} `{cmd}` TIMED OUT after {elapsed}ms. "
             f"Either fix the slowness, set UCW_VERIFY_TIMEOUT=<seconds>, "
             f"or set UCW_SKIP_AUTO_VERIFY=1 and run `/ucw ship` manually."
         )
     else:
-        excerpt = summary[-1200:] if summary else "(no test output captured)"
+        excerpt = summary[-1200:] if summary else "(no output captured)"
         reason = (
-            f"UCW auto-verify FAILED — `{cmd}` (exit {result.get('exit_code')}, "
-            f"{elapsed}ms). Fix the failures below, then Stop will pass.\n\n"
+            f"UCW auto-verify FAILED — {gate_label} `{cmd}` "
+            f"(exit {result.get('exit_code')}, {elapsed}ms). "
+            f"Fix the failures below, then Stop will pass.\n\n"
             f"{excerpt}"
         )
     write_output({"decision": "block", "reason": reason})
