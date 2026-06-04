@@ -111,12 +111,21 @@ def test_post_tool_use_catches_python_syntax_error(project):
 # ---- post-tool-batch ---------------------------------------------------------
 
 def test_post_tool_batch_streak_breaker(project):
+    """At threshold with auto-verify disabled, the hook falls back to the
+    classic 'agent must run something' block. (When auto-verify is on it
+    silently runs `bin/ucw-verify.py --gates lint,types` and only blocks
+    on actual gate failures — covered in test_post_tool_batch_detection.py.)
+    """
     (project / ".ucw" / "state" / "edit-streak").write_text("6")
-    _rc, out, _ = _run("post-tool-batch.py", {
-        "cwd": str(project),
-        "tools": [],
-    })
-    body = json.loads(out)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{REPO_ROOT}:{REPO_ROOT}/memory"
+    env["UCW_AUTO_STREAK_VERIFY"] = "0"
+    cp = subprocess.run(
+        [sys.executable, str(HOOKS / "post-tool-batch.py")],
+        input=json.dumps({"cwd": str(project), "tools": []}),
+        capture_output=True, text=True, env=env, timeout=10,
+    )
+    body = json.loads(cp.stdout)
     assert body["decision"] == "block"
 
 

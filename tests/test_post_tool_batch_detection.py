@@ -25,13 +25,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOKS = REPO_ROOT / "hooks"
 
 
-def _run(payload: dict) -> tuple[int, str, str]:
+def _run(payload: dict, extra_env: dict | None = None) -> tuple[int, str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT)
+    if extra_env:
+        env.update(extra_env)
     cp = subprocess.run(
         [sys.executable, str(HOOKS / "post-tool-batch.py")],
         input=json.dumps(payload), capture_output=True, text=True,
-        env=env, timeout=10,
+        env=env, timeout=15,
     )
     return cp.returncode, cp.stdout, cp.stderr
 
@@ -310,15 +312,16 @@ def test_detector_leaves_streak_alone_on_non_test_shapes(project, payload_extra)
 
 # ---- block still fires when no test detected at threshold ------------------
 
-def test_streak_breaker_still_blocks_when_no_test_detected(project):
-    """At threshold (5+), a batch without a test command must block."""
+def test_streak_breaker_blocks_when_no_test_detected_and_auto_verify_disabled(project):
+    """At threshold (5+), no verify command in batch, and auto-verify
+    explicitly disabled → block with the old manual-prompt reason."""
     (project / ".ucw" / "state" / "edit-streak").write_text("7")
     payload = {
         "cwd": str(project),
         "tools": [{"tool_name": "Edit",
                    "tool_input": {"file_path": "/repo/src/app.py"}}],
     }
-    rc, out, _err = _run(payload)
+    rc, out, _err = _run(payload, extra_env={"UCW_AUTO_STREAK_VERIFY": "0"})
     assert rc == 0
     body = json.loads(out)
     assert body["decision"] == "block"
@@ -337,6 +340,162 @@ def test_streak_breaker_does_not_block_when_test_detected_at_threshold(project):
     assert rc == 0
     assert out == "", "test run at threshold should silently reset, not block"
     assert _streak(project) == "0"
+
+
+# ---- PR H: auto-verify on streak break ------------------------------------
+# At the threshold, instead of just nagging the agent to run something, the
+# hook runs `bin/ucw-verify.py --gates lint,types` itself. Pass → silent
+# reset. Fail → block with the gate's failure summary. No runners → reset.
+
+def test_streak_break_auto_verify_passes_resets_silently(project):
+    """All fast gates pass → streak resets, no block emitted."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@true\ntypecheck:\n\t@true\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("7")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    rc, out, _err = _run(payload)
+    assert rc == 0
+    assert out == "", f"passing auto-verify should be silent, got: {out!r}"
+    assert _streak(project) == "0"
+
+
+def test_streak_break_auto_verify_lint_fail_blocks_with_summary(project):
+    """Lint fails at threshold → block names the gate + includes output."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'eslint: 3 problems' >&2 && false\n"
+        "typecheck:\n\t@true\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("6")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    rc, out, _err = _run(payload)
+    assert rc == 0
+    body = json.loads(out)
+    assert body["decision"] == "block"
+    assert "lint" in body["reason"].lower()
+    assert "eslint: 3 problems" in body["reason"]
+    # Streak NOT reset on failure — agent has unfinished work.
+    assert _streak(project) == "6"
+
+
+def test_streak_break_auto_verify_typecheck_fail_blocks_with_summary(project):
+    """Lint passes, typecheck fails → block names types gate."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@true\n"
+        "typecheck:\n\t@echo 'TS2322' >&2 && false\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("5")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    rc, out, _err = _run(payload)
+    assert rc == 0
+    body = json.loads(out)
+    assert body["decision"] == "block"
+    assert "types" in body["reason"].lower()
+    assert "TS2322" in body["reason"]
+
+
+def test_streak_break_auto_verify_skipped_when_no_runners_resets(project):
+    """No Makefile, no package.json, no detectable runners → ucw-verify
+    returns skipped. The streak resets — no point blocking when there's
+    nothing for the agent to actually run."""
+    (project / ".ucw" / "state" / "edit-streak").write_text("8")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    rc, out, _err = _run(payload)
+    assert rc == 0
+    assert out == "", "no runners → quiet reset, not block"
+    assert _streak(project) == "0"
+
+
+def test_streak_break_auto_verify_default_excludes_tests(project):
+    """Default UCW_STREAK_GATES is `lint,types` — tests are RESERVED for
+    Stop because a full suite is slow. If a project has only a `test:`
+    target (no lint/typecheck), verify is skipped and the streak resets."""
+    (project / "Makefile").write_text(
+        "test:\n\t@echo 'I should not have run' >&2 && false\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("7")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    rc, out, _err = _run(payload)
+    assert rc == 0
+    assert out == "", f"test gate must NOT run at streak break by default, got: {out!r}"
+    assert _streak(project) == "0"
+
+
+def test_streak_break_env_var_can_include_tests(project):
+    """UCW_STREAK_GATES=tests opts into running tests at streak break."""
+    (project / "Makefile").write_text(
+        "test:\n\t@echo 'test failed' >&2 && false\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("7")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    rc, out, _err = _run(payload, extra_env={"UCW_STREAK_GATES": "tests"})
+    assert rc == 0
+    body = json.loads(out)
+    assert body["decision"] == "block"
+    assert "tests" in body["reason"].lower()
+    assert "test failed" in body["reason"]
+
+
+def test_streak_break_below_threshold_does_not_run_verify(project):
+    """Below threshold, the hook must NOT shell out to ucw-verify — that
+    would add subprocess overhead to every batch. It just returns 0."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'I would say I ran' >&2 && false\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")  # below 5
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    rc, out, _err = _run(payload)
+    assert rc == 0
+    assert out == ""
+    # Streak stays at 3 — no edit happened in THIS batch, just a no-op
+    assert _streak(project) == "3"
+
+
+def test_streak_break_logs_gate_outcomes(project):
+    """For diagnosability the log line names each gate's pass/FAIL state."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@true\n"
+        "typecheck:\n\t@false\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("7")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    _run(payload)
+    log = (project / ".ucw" / "hooks.log").read_text()
+    assert "auto-verify (streak-break)" in log
+    assert "lint=pass" in log
+    assert "types=FAIL" in log
 
 
 # ---- defensive: malformed payloads must not crash --------------------------

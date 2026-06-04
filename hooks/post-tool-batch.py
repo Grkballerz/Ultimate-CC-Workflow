@@ -1,12 +1,28 @@
 #!/usr/bin/env python3
 """PostToolBatch hook — the streak breaker.
 
-After 5 consecutive Edit/Write calls with no verification gate run, block
-the agentic loop from continuing until the agent runs lint, types, OR
-tests (any verification step counts). Inspired by ECC's guardrails.
+After 5 consecutive Edit/Write calls with no verification gate run, the
+hook auto-runs the fast gates itself (lint + types via
+`bin/ucw-verify.py --gates lint,types`):
+
+- If the gates pass → silently reset the streak and let the agent
+  continue. The full suite still runs at Stop.
+- If a gate fails → block with the failure summary so the agent fixes
+  the right thing immediately. Counts the failure-and-fix as the
+  verification, so the agent doesn't have to also run vitest just to
+  reset the counter.
+- If the verifier can't run (missing, unreadable output) or no runners
+  detected → fall back to "agent, please run something" block — same
+  behavior as before this PR for edge cases.
+
+Tests are NOT in the streak-break gate set (full suite is reserved for
+Stop) to keep PostToolBatch responsive: typecheck/lint run in seconds,
+a full vitest/pytest suite can stretch into minutes and would freeze
+the loop every five edits.
 
 State lives in `.ucw/state/edit-streak` (incremented by post-tool-use.py,
-reset here when a verify-gate invocation is detected).
+reset here when a verify-gate invocation is detected in the batch OR
+when the auto-run gates pass).
 
 Detection notes:
 - Claude Code's PostToolBatch payload shape isn't formally documented and
@@ -20,19 +36,28 @@ Detection notes:
   matches what `bin/ucw-verify.py` runs as gates and what auto-mode
   retries on. Otherwise the agent gets nagged to run vitest even when a
   typecheck is the more relevant check.
+
+Env toggles:
+- UCW_AUTO_STREAK_VERIFY=0  → disable auto-verify, fall back to the
+                              old "agent must run something" block
+- UCW_STREAK_GATES=lint,types,tests  → override which gates run at the
+                                        streak break (default: lint,types)
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, read_payload, state_file, ucw_dir, write_output
+from _hook_common import log, project_root, read_payload, state_file, ucw_dir, write_output
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 STREAK_THRESHOLD = 5
 
@@ -140,6 +165,61 @@ def _batch_ran_verification(payload: dict) -> bool:
     return _scan_for_verify_command(payload)
 
 
+def _verify_binary() -> Path | None:
+    """Find ucw-verify.py — repo-relative first, then installed location.
+    Mirrors stop.py:_verify_binary so the two hooks stay consistent."""
+    candidates = [
+        REPO_ROOT / "bin" / "ucw-verify.py",
+        Path.home() / ".claude" / "ucw" / "bin" / "ucw-verify.py",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+def _streak_gates() -> list[str]:
+    """Which gates to run at the streak break. Default: lint + types (fast).
+    Tests are reserved for Stop because a full suite can take minutes — we
+    don't want PostToolBatch to freeze the loop every 5 edits.
+    """
+    raw = os.environ.get("UCW_STREAK_GATES", "").strip()
+    if not raw:
+        return ["lint", "types"]
+    gates = [g.strip().lower() for g in raw.split(",") if g.strip()]
+    valid = [g for g in gates if g in {"lint", "types", "tests"}]
+    return valid or ["lint", "types"]
+
+
+def _auto_verify_disabled() -> bool:
+    return os.environ.get("UCW_AUTO_STREAK_VERIFY", "").strip() in {"0", "false", "no", "off"}
+
+
+def _run_auto_verify(payload: dict, gates: list[str]) -> dict | None:
+    """Returns the JSON result from ucw-verify.py, or None if it couldn't run.
+    Same shape as stop.py:_run_auto_verify (which it intentionally mirrors)."""
+    verify = _verify_binary()
+    if verify is None:
+        log(payload, "auto-verify: ucw-verify.py not found")
+        return None
+    project = project_root(payload)
+    try:
+        cp = subprocess.run(
+            [sys.executable, str(verify), "--repo", str(project),
+             "--gates", ",".join(gates)],
+            capture_output=True, text=True, timeout=300,
+            env=os.environ.copy(),
+        )
+    except subprocess.SubprocessError as exc:
+        log(payload, f"auto-verify: subprocess failed: {exc}")
+        return None
+    try:
+        return json.loads(cp.stdout)
+    except json.JSONDecodeError:
+        log(payload, f"auto-verify: unparseable output: {cp.stdout[:200]}")
+        return None
+
+
 def _maybe_capture_payload(payload: dict) -> None:
     """If `UCW_DEBUG_PAYLOADS=1` or `.ucw/state/debug-payloads` exists, dump
     the raw payload to `.ucw/state/post-tool-batch-payloads.jsonl` so the
@@ -179,24 +259,98 @@ def main() -> int:
         return 0
 
     log(payload, f"streak breaker fired: {streak_before} edits without a verify gate")
+
+    # If the user has explicitly disabled auto-verify, restore the old
+    # "agent must run something" behavior.
+    if _auto_verify_disabled():
+        _block_with_manual_prompt(streak_before)
+        return 0
+
+    gates = _streak_gates()
+    result = _run_auto_verify(payload, gates)
+
+    # Verifier couldn't run (missing, crashed, unparseable). Fall back to
+    # asking the agent to do it — same as pre-PR-H behavior.
+    if result is None:
+        log(payload, "auto-verify: unavailable, falling back to manual prompt")
+        _block_with_manual_prompt(streak_before, gates=gates)
+        return 0
+
+    gates_summary = ",".join(
+        f"{g.get('name')}={'pass' if g.get('passed') else 'FAIL'}"
+        for g in (result.get("gates") or [])
+    ) or "<none>"
+    log(payload,
+        f"auto-verify (streak-break): passed={result.get('passed')} "
+        f"skipped={result.get('skipped', False)} gates=[{gates_summary}] "
+        f"failed_gate={result.get('failed_gate')!r}")
+
+    # No runners detected for the requested gates → nothing to verify, reset
+    # the streak and move on. Otherwise the agent's stuck in a loop with
+    # nothing it can run.
+    if result.get("skipped"):
+        _reset_streak(payload)
+        return 0
+
+    if result.get("passed"):
+        # Quietly reset and continue. The Stop hook still runs the FULL
+        # gate suite (incl. tests) before the turn actually ends.
+        _reset_streak(payload)
+        return 0
+
+    # A gate failed. Block with the failure so the agent fixes it. Don't
+    # reset the streak — but the fix-and-rerun cycle will reset on the
+    # next batch (the agent's verify run satisfies _batch_ran_verification).
+    gate = result.get("failed_gate") or "verify"
+    gate_label = f"{gate} gate" if gate in {"lint", "types", "tests"} else gate
+    cmd = result.get("command") or "<no command>"
+    elapsed = result.get("elapsed_ms", 0)
+    summary = (result.get("summary") or "").strip()
+    excerpt = summary[-1000:] if summary else "(no output captured)"
+    reason = (
+        f"UCW streak-break auto-verify: {gate_label} `{cmd}` failed "
+        f"(exit {result.get('exit_code')}, {elapsed}ms). "
+        f"Fix the failures below before continuing — the next edit batch "
+        f"that runs verify will reset the streak.\n\n"
+        f"{excerpt}"
+    )
     write_output({
         "decision": "block",
-        "reason": (
-            f"UCW streak breaker: {streak_before} edits without running a verify "
-            f"gate (lint, types, or tests). Run any of them — `eslint`, `tsc`, "
-            f"`pytest`, `make lint`, `bin/ucw-verify.py`, etc. — before continuing. "
-            f"Untested edit chains lead to regression debt."
-        ),
+        "reason": reason,
         "hookSpecificOutput": {
             "hookEventName": "PostToolBatch",
             "additionalContext": (
-                f"Edit streak = {streak_before}. Run a verify gate now (lint, "
-                f"types, or tests — `bin/ucw-verify.py` runs them all). After "
-                f"it passes, the streak resets and you can continue."
+                f"Streak={streak_before}, {gate_label} failed. Fix the issue, "
+                f"then run any verify gate to reset the counter."
             ),
         },
     })
     return 0
+
+
+def _block_with_manual_prompt(streak: int, *, gates: list[str] | None = None) -> None:
+    """Old behavior: block and tell the agent to run a verify gate itself.
+    Used when auto-verify is disabled or unavailable."""
+    gates_hint = ",".join(gates) if gates else "lint,types"
+    write_output({
+        "decision": "block",
+        "reason": (
+            f"UCW streak breaker: {streak} edits without running a verify "
+            f"gate (lint, types, or tests). Run any of them — `eslint`, `tsc`, "
+            f"`pytest`, `make lint`, `bin/ucw-verify.py --gates {gates_hint}`, "
+            f"etc. — before continuing. Untested edit chains lead to "
+            f"regression debt."
+        ),
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolBatch",
+            "additionalContext": (
+                f"Edit streak = {streak}. Run a verify gate now (lint, "
+                f"types, or tests — `bin/ucw-verify.py --gates {gates_hint}` "
+                f"runs them in one shot). After it passes, the streak "
+                f"resets and you can continue."
+            ),
+        },
+    })
 
 
 if __name__ == "__main__":

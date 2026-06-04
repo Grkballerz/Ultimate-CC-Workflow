@@ -43,13 +43,15 @@ TOP_LEVEL_ALLOWED = {
 }
 
 
-def _run(hook: str, payload: dict) -> tuple[int, str, str]:
+def _run(hook: str, payload: dict, extra_env: dict | None = None) -> tuple[int, str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{REPO_ROOT}:{REPO_ROOT}/memory"
+    if extra_env:
+        env.update(extra_env)
     cp = subprocess.run(
         [sys.executable, str(HOOKS / hook)],
         input=json.dumps(payload), capture_output=True, text=True,
-        env=env, timeout=10,
+        env=env, timeout=15,
     )
     return cp.returncode, cp.stdout, cp.stderr
 
@@ -167,10 +169,30 @@ def test_post_tool_batch_realistic_payload_is_schema_compliant(project):
              "tool_response": {"success": True}},
         ],
     }
-    _, out, _ = _run("post-tool-batch.py", payload)
+    # Disable auto-verify so we test the manual-prompt block path
+    # (the auto-verify path's schema is covered in test_post_tool_batch_detection.py).
+    _, out, _ = _run("post-tool-batch.py", payload, extra_env={"UCW_AUTO_STREAK_VERIFY": "0"})
     _validate(out, event_name="PostToolBatch")
     body = json.loads(out)
     # No test command in payload → must still block at threshold
+    assert body["decision"] == "block"
+
+
+def test_post_tool_batch_auto_verify_failure_block_is_schema_compliant(project):
+    """PR H: at threshold, if the auto-run gate fails, the hook emits a
+    block with hookSpecificOutput.hookEventName='PostToolBatch'. Lock in
+    that the new failure path emits schema-valid output."""
+    (project / "Makefile").write_text("lint:\n\t@false\ntypecheck:\n\t@true\n")
+    (project / ".ucw" / "state" / "edit-streak").write_text("7")
+    payload = {
+        "cwd": str(project),
+        "hook_event_name": "PostToolBatch",
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": str(project / "a.py")}}],
+    }
+    _, out, _ = _run("post-tool-batch.py", payload)
+    _validate(out, event_name="PostToolBatch")
+    body = json.loads(out)
     assert body["decision"] == "block"
 
 

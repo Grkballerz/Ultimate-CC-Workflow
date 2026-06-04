@@ -5,6 +5,55 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Changed — Streak breaker auto-runs verify itself instead of just nagging (PR H)
+
+Completes the trio (PR F: full gate suite at Stop; PR G: streak counts
+any gate; PR H: streak hook runs the gate itself).
+
+Before: when `.ucw/state/edit-streak` hit 5, `hooks/post-tool-batch.py`
+just blocked with "agent, please run a verify gate." The agent then ran
+`bin/ucw-verify.py` (or `tsc`, `eslint`, ...), PostToolBatch fired
+again, detected the verify command, and reset the streak. Two extra
+turns for a check the hook could have done itself.
+
+PR H makes the hook run the gates itself when the streak hits the
+threshold — same pattern as `hooks/stop.py`. Outcomes:
+
+- **All gates pass** → silently reset the streak, agent continues. No
+  block, no noise. This works at every auto-mode level — even level 0,
+  because running a check isn't an autonomous *action*, it's just doing
+  what the agent would have done anyway.
+- **A gate fails** → block with the gate name and failure excerpt, so
+  the agent fixes the right thing immediately. Streak preserved; the
+  fix-and-rerun cycle resets it on the next batch (PR G's broader
+  pattern matches the agent's verify run).
+- **No runners detected** → reset streak quietly. Don't block when
+  there's nothing the agent can run.
+- **Verifier crashed / unparseable** → fall back to PR G's
+  manual-prompt block ("please run something") so we never leave the
+  agent stuck.
+
+**Default gates at streak break: `lint,types` (NOT tests).** Tests are
+reserved for Stop because a full vitest/pytest suite can take minutes
+— PostToolBatch fires often enough that running tests on every break
+would freeze the loop. Typecheck + lint together catch >90% of errors
+in seconds. Override with `UCW_STREAK_GATES=lint,types,tests` if you
+prefer the slower-but-thorough variant.
+
+New env knobs:
+- `UCW_AUTO_STREAK_VERIFY=0` — disable auto-verify, restore PR G's
+  "agent must run something" block
+- `UCW_STREAK_GATES=tests` — comma-separated subset; same syntax as
+  `UCW_VERIFY_GATES` but only affects PostToolBatch
+
+9 new tests in `tests/test_post_tool_batch_detection.py` cover: lint
+pass + types pass → silent reset, lint fail → block with summary,
+typecheck fail → block with summary, no runners → quiet reset, default
+excludes tests, `UCW_STREAK_GATES=tests` opt-in, below-threshold no-op,
+disabled-via-env restores old behavior, log includes per-gate status.
+1 new schema-compliance test for the auto-verify failure block. Suite:
+581 + 1 xfail (was 572).
+
 ### Changed — Streak breaker counts ANY verify gate, not just tests (PR G)
 
 Companion to PR F. The PostToolBatch streak breaker
