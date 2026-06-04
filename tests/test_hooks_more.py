@@ -104,6 +104,53 @@ def test_stop_blocks_with_failure_summary_includes_command(project):
     assert "make test" in body["reason"]
 
 
+def test_stop_blocks_on_lint_failure_even_when_tests_pass(project):
+    """The bug this fixes: previously verify only ran the test runner, so
+    `eslint .` / `tsc --noEmit` failures slipped through and the hook would
+    advance phase=verify on a broken codebase. Now lint runs first and
+    blocks the Stop."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'lint problem' >&2 && false\n"
+        "test:\n\t@true\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    body = json.loads(out)
+    assert body["decision"] == "block"
+    assert "lint" in body["reason"].lower()
+    # Phase must NOT have advanced — lint failed, build is not done.
+    assert (project / ".ucw" / "state" / "phase").read_text().strip() == "build"
+
+
+def test_stop_blocks_on_typecheck_failure_even_when_tests_pass(project):
+    (project / "Makefile").write_text(
+        "typecheck:\n\t@echo 'TS2322' >&2 && false\n"
+        "test:\n\t@true\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("1")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    body = json.loads(out)
+    assert body["decision"] == "block"
+    assert "types" in body["reason"].lower()
+    assert "TS2322" in body["reason"]
+
+
+def test_stop_allows_only_when_all_gates_pass(project):
+    """Lint + types + tests all pass → streak cleared, phase=verify."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@true\n"
+        "typecheck:\n\t@true\n"
+        "test:\n\t@true\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    assert out == ""
+    assert (project / ".ucw" / "state" / "phase").read_text().strip() == "verify"
+
+
 def test_stop_does_not_emit_hookSpecificOutput(project):
     """Regression: Claude Code's strict schema only allows hookSpecificOutput
     on PreToolUse / UserPromptSubmit / PostToolUse / PostToolBatch. Stop

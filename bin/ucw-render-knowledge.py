@@ -136,6 +136,11 @@ def build_substitutions(state: dict[str, Any]) -> dict[str, str]:
         "runtime":             pref("runtime", _list_or_blank(runtimes)),
         "test_runner":         pref("test_runner", _list_or_blank(test_runners)),
         "formatter":           pref("formatter", _list_or_blank(formatters)),
+        "linter":              pref("linter", _list_or_blank(linters)),
+        "typechecker":         pref("typechecker", _list_or_blank(
+            [tc for tc in ("tsc", "mypy") if tc in (linters or [])]
+            or (["tsc"] if "typescript" in (stack.get("languages") or []) else [])
+        )),
         "init_at":             today,
 
         # INDEX
