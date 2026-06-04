@@ -74,13 +74,16 @@ idiom-heavy edits.
 - Edit streak counter increments
 
 **Streak breaker**: after 5 edits with no **verify gate** run,
-`hooks/post-tool-batch.py` refuses to let the agent stop until something
-verified the changes. Reset by any Bash call that ran lint, types, or
-tests — `eslint`, `tsc`, `ruff`, `mypy`, `pytest`, `vitest`, `jest`,
+`hooks/post-tool-batch.py` auto-runs `bin/ucw-verify.py --gates lint,types`
+itself — pass → silent reset, fail → block with the failure summary.
+Tests are reserved for Stop because a full suite is slow. The streak
+also resets transparently when the agent's batch contains a verify
+invocation: `eslint`, `tsc`, `ruff`, `mypy`, `pytest`, `vitest`, `jest`,
 `go vet`, `go test`, `cargo check`, `cargo test`, `cargo clippy`, `rspec`,
 `mocha`, `phpunit`, `make lint|typecheck|test|check|verify`,
 `pnpm|npm|yarn|bun run lint|typecheck|tsc|test|check|verify`, or
-`bin/ucw-verify.py` itself.
+`bin/ucw-verify.py`. Toggle the auto-run off with `UCW_AUTO_STREAK_VERIFY=0`;
+override gate set with `UCW_STREAK_GATES=lint,types,tests`.
 
 **Stop guard**: while `phase = build` and `edit-streak > 0`,
 `hooks/stop.py` blocks Stop with a checklist of what's red.
