@@ -5,6 +5,42 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Changed — Streak breaker counts ANY verify gate, not just tests (PR G)
+
+Companion to PR F. The PostToolBatch streak breaker
+(`hooks/post-tool-batch.py`) was only resetting `.ucw/state/edit-streak`
+when it spotted a test-runner invocation (vitest, pytest, jest, ...).
+A `pnpm exec eslint .` or `npx tsc --noEmit` run — equally valid
+verification — did nothing to the counter. Result: after 5 edits the
+breaker would force the agent to run vitest specifically, even when a
+typecheck was the more relevant check. Users had to manually run vitest
+"to break the streak and continue."
+
+PR G expands `_VERIFY_SIGNAL_PATTERNS` (renamed from
+`_TEST_SIGNAL_PATTERNS`) to cover all three gates:
+
+- **Tests**: pytest, vitest, jest, mocha, rspec, playwright, go test,
+  cargo test, phpunit (unchanged)
+- **Lint**: eslint, biome (check|lint|ci|format), ruff (check|format),
+  golangci-lint, cargo clippy
+- **Types**: tsc, mypy, cargo check, go vet
+- **Generic**: `make <test|lint|typecheck|types|check|verify>` and
+  `npm|pnpm|yarn|bun (run|exec)? <test|lint|typecheck|tsc|check|verify|format>`
+- **UCW itself**: `bin/ucw-verify.py` invocations (with or without
+  `python` prefix) count — that IS verification.
+
+Build/dev scripts (`pnpm run dev`, `pnpm run build`, `npm start`,
+`yarn install`) deliberately do NOT count — otherwise the breaker is
+useless, the agent could just run `pnpm dev` every few edits and never
+verify anything.
+
+User-facing block message updated to name lint/types/tests explicitly
+and to suggest `bin/ucw-verify.py` as the one-shot path.
+
+18 new positive shapes + 4 new negative shapes in
+`tests/test_post_tool_batch_detection.py` (51 pass + 1 xfail, was 33 +
+1 xfail). Full suite: 572 pass + 1 xfail (was 548).
+
 ### Changed — Auto-verify now runs the full gate suite (PR F)
 
 Fixes a longstanding mismatch: the `verifier` subagent's design

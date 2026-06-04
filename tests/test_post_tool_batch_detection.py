@@ -117,6 +117,112 @@ POSITIVE_SHAPES = [
                     "tool_input": {"command": "phpunit --testdox"}}]},
         id="phpunit",
     ),
+    # ---- Lint gate: any of these should also reset the streak. ----
+    # Before this fix, the agent could run `tsc` or `eslint` against its
+    # edits and the streak breaker would still nag for vitest specifically.
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "pnpm exec eslint ."}}]},
+        id="eslint-via-pnpm-exec",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "npx eslint src/"}}]},
+        id="eslint-via-npx",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "biome check ."}}]},
+        id="biome-check",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "ruff check src/"}}]},
+        id="ruff-check",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "golangci-lint run ./..."}}]},
+        id="golangci-lint",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "cargo clippy -- -D warnings"}}]},
+        id="cargo-clippy",
+    ),
+    # ---- Types gate ----
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "npx tsc --noEmit"}}]},
+        id="tsc-noemit",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "pnpm exec tsc"}}]},
+        id="tsc-via-pnpm-exec",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "mypy src/"}}]},
+        id="mypy",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "cargo check --quiet"}}]},
+        id="cargo-check",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "go vet ./..."}}]},
+        id="go-vet",
+    ),
+    # ---- Generic build-system invocations of any gate ----
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "make lint"}}]},
+        id="make-lint",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "make typecheck"}}]},
+        id="make-typecheck",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "make check"}}]},
+        id="make-check",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "pnpm run lint"}}]},
+        id="pnpm-run-lint",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "pnpm run typecheck"}}]},
+        id="pnpm-run-typecheck",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "yarn lint"}}]},
+        id="yarn-lint-bare",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "bun run verify"}}]},
+        id="bun-run-verify",
+    ),
+    # ---- ucw-verify itself counts ----
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "bin/ucw-verify.py --gates lint,types"}}]},
+        id="ucw-verify-direct",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "python bin/ucw-verify.py"}}]},
+        id="ucw-verify-via-python",
+    ),
 ]
 
 
@@ -127,8 +233,8 @@ def test_detector_resets_streak_on_known_test_shape(project, payload_extra):
     assert rc == 0
     assert out == "", f"streak below threshold + test detected → silent, got: {out!r}"
     assert _streak(project) == "0", (
-        f"shape {payload_extra} should reset streak — _batch_ran_tests "
-        f"failed to spot the test command"
+        f"shape {payload_extra} should reset streak — _batch_ran_verification "
+        f"failed to spot the verify command"
     )
 
 
@@ -162,6 +268,29 @@ NEGATIVE_SHAPES = [
             reason="word-boundary regex catches bare 'pytest' even inside echo; "
                    "acceptable false-positive — better to over-detect than under-detect"
         ),
+    ),
+    # ---- Build/dev scripts must NOT count as verification ----
+    # Otherwise the streak breaker is useless: an agent running `pnpm dev`
+    # every few edits would never get nagged to actually check its work.
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "pnpm run dev"}}]},
+        id="pnpm-run-dev-does-not-count",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "pnpm run build"}}]},
+        id="pnpm-run-build-does-not-count",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "npm start"}}]},
+        id="npm-start-does-not-count",
+    ),
+    pytest.param(
+        {"tools": [{"tool_name": "Bash",
+                    "tool_input": {"command": "yarn install"}}]},
+        id="yarn-install-does-not-count",
     ),
 ]
 

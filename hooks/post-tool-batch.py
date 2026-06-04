@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """PostToolBatch hook — the streak breaker.
 
-After 5 consecutive Edit/Write calls with no Bash test invocation, block the
-agentic loop from continuing until a test is run. Inspired by ECC's
-guardrails.
+After 5 consecutive Edit/Write calls with no verification gate run, block
+the agentic loop from continuing until the agent runs lint, types, OR
+tests (any verification step counts). Inspired by ECC's guardrails.
 
 State lives in `.ucw/state/edit-streak` (incremented by post-tool-use.py,
-reset here when a test run is detected).
+reset here when a verify-gate invocation is detected).
 
 Detection notes:
 - Claude Code's PostToolBatch payload shape isn't formally documented and
   has shifted across versions (sometimes `tools`, sometimes `batch`,
   sometimes nested under `tool_results`). Rather than hardcode one shape,
-  we recursively scan every string value in the payload for known test
-  runner invocations with word-boundary matching — so `pytest -q` counts
-  but `tests/test_pytest.py` does not.
+  we recursively scan every string value in the payload for known verify
+  commands with word-boundary matching — so `pytest -q` counts but
+  `tests/test_pytest.py` does not.
+- "Verify" is broader than just tests: a `tsc --noEmit` or `eslint .` run
+  is a real check on the agent's edits and resets the streak too. This
+  matches what `bin/ucw-verify.py` runs as gates and what auto-mode
+  retries on. Otherwise the agent gets nagged to run vitest even when a
+  typecheck is the more relevant check.
 """
 from __future__ import annotations
 
@@ -31,11 +36,12 @@ from _hook_common import log, read_payload, state_file, ucw_dir, write_output
 
 STREAK_THRESHOLD = 5
 
-# Word-boundary patterns for each runner. `\b` keeps `tests/` paths and
-# variable names like `pytest_plugins` from triggering a false positive.
-# `go test` and `cargo test` need the two-word form to avoid matching
-# the bare words `test`/`go`/`cargo` in unrelated contexts.
-_TEST_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+# Word-boundary patterns for each verify gate. `\b` keeps `tests/` paths
+# and variable names like `pytest_plugins` from triggering false positives.
+# Two-word patterns (`go test`, `cargo check`) avoid matching bare words
+# like `test`/`go`/`cargo`/`check` in unrelated contexts.
+_VERIFY_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # ---- Test runners (gate: tests) ----
     re.compile(r"\bpytest\b"),
     re.compile(r"\bvitest\b"),
     re.compile(r"\bjest\b"),
@@ -44,12 +50,33 @@ _TEST_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bplaywright\s+test\b"),
     re.compile(r"\bgo\s+test\b"),
     re.compile(r"\bcargo\s+test\b"),
-    re.compile(r"\bmake\s+test\b"),
-    re.compile(r"\bnpm\s+(?:run\s+)?test\b"),
-    re.compile(r"\bpnpm\s+(?:run\s+)?test\b"),
-    re.compile(r"\byarn\s+(?:run\s+)?test\b"),
-    re.compile(r"\bbun\s+test\b"),
     re.compile(r"\bphpunit\b"),
+    # ---- Linters / formatters (gate: lint) ----
+    re.compile(r"\beslint\b"),
+    re.compile(r"\bbiome\s+(?:check|lint|ci|format)\b"),
+    re.compile(r"\bruff\s+(?:check|format)\b"),
+    re.compile(r"\bgolangci-lint\b"),
+    re.compile(r"\bcargo\s+clippy\b"),
+    # ---- Type checkers (gate: types) ----
+    re.compile(r"\btsc\b"),
+    re.compile(r"\bmypy\b"),
+    re.compile(r"\bcargo\s+check\b"),
+    re.compile(r"\bgo\s+vet\b"),
+    # ---- Generic build-system invocations of any gate ----
+    # `make test|lint|typecheck|types|check|verify` — covers all the
+    # Makefile-driven gates ucw-verify.py looks for.
+    re.compile(r"\bmake\s+(?:test|lint|typecheck|types|check|verify)\b"),
+    # `npm|pnpm|yarn|bun` running a verify-looking script. We deliberately
+    # do NOT match arbitrary scripts (e.g. `pnpm run dev`, `pnpm run build`)
+    # because those don't verify anything.
+    re.compile(
+        r"\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+|exec\s+)?"
+        r"(?:test|lint|typecheck|tsc|check|verify|format)\b"
+    ),
+    # ---- UCW's own verifier ----
+    # Direct invocations like `bin/ucw-verify.py --gates lint,types` should
+    # also count — that IS verification.
+    re.compile(r"\bucw-verify(?:\.py)?\b"),
 )
 
 # Keys whose values are almost certainly file paths, not commands. Skipping
@@ -81,12 +108,12 @@ def _reset_streak(payload: dict) -> None:
             pass
 
 
-def _looks_like_test_command(s: str) -> bool:
-    return any(p.search(s) for p in _TEST_SIGNAL_PATTERNS)
+def _looks_like_verify_command(s: str) -> bool:
+    return any(p.search(s) for p in _VERIFY_SIGNAL_PATTERNS)
 
 
-def _scan_for_test_command(node: Any, *, parent_key: str = "") -> bool:
-    """Walk an arbitrary JSON-shaped payload looking for a test command string.
+def _scan_for_verify_command(node: Any, *, parent_key: str = "") -> bool:
+    """Walk an arbitrary JSON-shaped payload looking for a verify-gate command.
 
     We don't pin down the exact shape because Claude Code's PostToolBatch
     payload is not stably documented; instead we look at every leaf string
@@ -96,20 +123,21 @@ def _scan_for_test_command(node: Any, *, parent_key: str = "") -> bool:
     if isinstance(node, str):
         if parent_key in _PATH_LIKE_KEYS:
             return False
-        return _looks_like_test_command(node)
+        return _looks_like_verify_command(node)
     if isinstance(node, dict):
         for k, v in node.items():
-            if _scan_for_test_command(v, parent_key=k):
+            if _scan_for_verify_command(v, parent_key=k):
                 return True
         return False
     if isinstance(node, list):
-        return any(_scan_for_test_command(item, parent_key=parent_key) for item in node)
+        return any(_scan_for_verify_command(item, parent_key=parent_key) for item in node)
     return False
 
 
-def _batch_ran_tests(payload: dict) -> bool:
-    """Inspect the batch payload for any tool call that looks test-y."""
-    return _scan_for_test_command(payload)
+def _batch_ran_verification(payload: dict) -> bool:
+    """Inspect the batch payload for any tool call that runs a verify gate
+    (lint, types, OR tests). Any of the three resets the streak."""
+    return _scan_for_verify_command(payload)
 
 
 def _maybe_capture_payload(payload: dict) -> None:
@@ -138,7 +166,7 @@ def main() -> int:
     payload = read_payload()
     _maybe_capture_payload(payload)
 
-    detected = _batch_ran_tests(payload)
+    detected = _batch_ran_verification(payload)
     streak_before = _streak(payload)
     log(payload,
         f"detection={detected} streak={streak_before} batch_keys={sorted(payload.keys())}")
@@ -150,19 +178,21 @@ def main() -> int:
     if streak_before < STREAK_THRESHOLD:
         return 0
 
-    log(payload, f"streak breaker fired: {streak_before} edits without a test run")
+    log(payload, f"streak breaker fired: {streak_before} edits without a verify gate")
     write_output({
         "decision": "block",
         "reason": (
-            f"UCW streak breaker: {streak_before} edits without running tests. "
-            f"Run the test suite (or the relevant test file) before continuing — "
-            f"untested edit chains lead to regression debt."
+            f"UCW streak breaker: {streak_before} edits without running a verify "
+            f"gate (lint, types, or tests). Run any of them — `eslint`, `tsc`, "
+            f"`pytest`, `make lint`, `bin/ucw-verify.py`, etc. — before continuing. "
+            f"Untested edit chains lead to regression debt."
         ),
         "hookSpecificOutput": {
             "hookEventName": "PostToolBatch",
             "additionalContext": (
-                f"Edit streak = {streak_before}. Run tests now. After tests pass, the "
-                f"streak resets and you can continue."
+                f"Edit streak = {streak_before}. Run a verify gate now (lint, "
+                f"types, or tests — `bin/ucw-verify.py` runs them all). After "
+                f"it passes, the streak resets and you can continue."
             ),
         },
     })

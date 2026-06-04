@@ -73,10 +73,14 @@ idiom-heavy edits.
 - YAML: parse check if PyYAML available
 - Edit streak counter increments
 
-**Streak breaker**: after 5 edits with no test run, `hooks/post-tool-batch.py`
-refuses to let the agent stop until tests have been invoked. Reset by any
-Bash call containing `pytest`, `vitest`, `jest`, `go test`, `cargo test`,
-`rspec`, or `mocha`.
+**Streak breaker**: after 5 edits with no **verify gate** run,
+`hooks/post-tool-batch.py` refuses to let the agent stop until something
+verified the changes. Reset by any Bash call that ran lint, types, or
+tests — `eslint`, `tsc`, `ruff`, `mypy`, `pytest`, `vitest`, `jest`,
+`go vet`, `go test`, `cargo check`, `cargo test`, `cargo clippy`, `rspec`,
+`mocha`, `phpunit`, `make lint|typecheck|test|check|verify`,
+`pnpm|npm|yarn|bun run lint|typecheck|tsc|test|check|verify`, or
+`bin/ucw-verify.py` itself.
 
 **Stop guard**: while `phase = build` and `edit-streak > 0`,
 `hooks/stop.py` blocks Stop with a checklist of what's red.
@@ -136,7 +140,7 @@ block. Slash commands write it.
 
 | Symptom | Probable cause | Fix |
 |---|---|---|
-| Stop blocked with "edit streak > 0" | Made changes without running tests | Run tests. The streak resets on any test invocation. |
+| Stop blocked with "edit streak > 0" | Made changes without running a verify gate | Run lint, types, OR tests. The streak resets on any verify-gate invocation (incl. `bin/ucw-verify.py`). |
 | Stop blocked with "Verify must pass" | In build phase, gates haven't been run | Run `/ucw ship` (or the verifier directly). |
 | `/ucw plan` keeps re-asking the same Scope question | Last session ended mid-Scope | `ucw-phase.py clear` then start fresh. |
 | Scribe drowning DESIGN.md in churn | `PREFERENCES.scribe_mode` is too aggressive | Set to `additive-only` or `propose-only`. |
