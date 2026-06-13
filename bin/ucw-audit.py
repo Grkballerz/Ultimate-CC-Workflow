@@ -92,40 +92,65 @@ def _iter_lines(path: Path) -> Iterable[tuple[int, str]]:
         return
 
 
-def scan_secrets(path: Path) -> list[Finding]:
+def scan_secrets(path: Path, *, allow_suppress: bool = True) -> list[Finding]:
     out: list[Finding] = []
     for line_no, line in _iter_lines(path):
-        if _suppressed(line):
-            continue
+        token = _suppress_token(line) if allow_suppress else None
         for rule, pattern in SECRET_PATTERNS:
-            if pattern.search(line):
-                # Allow obvious placeholders so users can keep examples committed.
-                if re.search(r"\b(example|placeholder|your[-_ ]?key|xxxxx|\.\.\.|<.+?>)\b", line, re.IGNORECASE):
-                    out.append(Finding("minor", "secret", str(path), line_no, rule,
-                                       "matches secret pattern but looks like a placeholder"))
-                else:
-                    out.append(Finding("critical", "secret", str(path), line_no, rule,
-                                       f"possible {rule} in source"))
+            if not pattern.search(line):
+                continue
+            # A matching audit-allow token downgrades to a *visible* nit rather
+            # than silently dropping the finding — suppressions stay auditable.
+            if _suppresses_rule(token, rule):
+                out.append(Finding("nit", "secret", str(path), line_no, rule,
+                                   f"finding suppressed by audit-allow:{token}"))
+                continue
+            # Allow obvious placeholders so users can keep examples committed.
+            if re.search(r"\b(example|placeholder|your[-_ ]?key|xxxxx|\.\.\.|<.+?>)\b", line, re.IGNORECASE):
+                out.append(Finding("minor", "secret", str(path), line_no, rule,
+                                   "matches secret pattern but looks like a placeholder"))
+            else:
+                out.append(Finding("critical", "secret", str(path), line_no, rule,
+                                   f"possible {rule} in source"))
     return out
 
 
-def scan_injection(path: Path) -> list[Finding]:
+def scan_injection(path: Path, *, allow_suppress: bool = True) -> list[Finding]:
     out: list[Finding] = []
     for line_no, line in _iter_lines(path):
-        if _suppressed(line):
-            continue
+        token = _suppress_token(line) if allow_suppress else None
         for rule, pattern, msg in INJECTION_PATTERNS:
-            if pattern.search(line):
-                out.append(Finding("major", "injection", str(path), line_no, rule, msg))
+            if not pattern.search(line):
+                continue
+            if _suppresses_rule(token, rule):
+                out.append(Finding("nit", "injection", str(path), line_no, rule,
+                                   f"finding suppressed by audit-allow:{token}"))
+                continue
+            out.append(Finding("major", "injection", str(path), line_no, rule, msg))
     return out
 
 
-# Suppress on lines tagged `audit-allow:` (any comment style).
+# Suppress on lines tagged `audit-allow: <rule>` (any comment style).
+# The token after the colon MUST name the rule being silenced (or `*` / `all`
+# to silence every rule on that line). A bare, wrong, or unrelated token does
+# NOT suppress — otherwise attacker-controlled file content could plant
+# `audit-allow: x` to silence an unrelated planted secret/injection. Suppression
+# is also only honored on UCW-owned default targets, never on `--target` paths
+# (see audit()).
 _SUPPRESS_RE = re.compile(r"audit-allow\s*:\s*(\S+)", re.IGNORECASE)
 
 
-def _suppressed(line: str) -> bool:
-    return bool(_SUPPRESS_RE.search(line))
+def _suppress_token(line: str) -> str | None:
+    """Return the rule token from an `audit-allow:` tag on this line, if any."""
+    m = _SUPPRESS_RE.search(line)
+    return m.group(1) if m else None
+
+
+def _suppresses_rule(token: str | None, rule: str) -> bool:
+    """True if an audit-allow token authorizes silencing `rule` specifically."""
+    if token is None:
+        return False
+    return token in ("*", "all") or token == rule
 
 
 def scan_mcp_configs(path: Path) -> list[Finding]:
@@ -230,11 +255,28 @@ def _skip(p: Path) -> bool:
     return False
 
 
-def audit(targets: list[Path]) -> list[Finding]:
+def _under_any(path: Path, roots: list[Path]) -> bool:
+    """True if `path` is one of, or lives under, any root in `roots`."""
+    rp = path.resolve()
+    for root in roots:
+        try:
+            rp.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def audit(targets: list[Path], suppress_roots: list[Path] | None = None) -> list[Finding]:
+    # `audit-allow:` is only honored for files under UCW-owned default targets.
+    # Files added via --target are treated as untrusted: their suppression
+    # comments are ignored so planted content cannot silence a real finding.
+    suppress_roots = suppress_roots if suppress_roots is not None else list(targets)
     findings: list[Finding] = []
     for path in gather_files(targets):
-        findings.extend(scan_secrets(path))
-        findings.extend(scan_injection(path))
+        allow_suppress = _under_any(path, suppress_roots)
+        findings.extend(scan_secrets(path, allow_suppress=allow_suppress))
+        findings.extend(scan_injection(path, allow_suppress=allow_suppress))
         if path.suffix == ".json":
             findings.extend(scan_mcp_configs(path))
         if path.suffix == ".md":
@@ -313,11 +355,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo).resolve()
-    targets = default_targets(repo_root)
+    default = default_targets(repo_root)
+    targets = list(default)
     if args.target:
         targets.extend(Path(t).resolve() for t in args.target)
 
-    findings = audit(targets)
+    # Only UCW-owned default targets may use `audit-allow:` to suppress findings.
+    findings = audit(targets, suppress_roots=default)
 
     if args.json:
         print(json.dumps([f.as_dict() for f in findings], indent=2))
