@@ -75,5 +75,5 @@ is bypassed, file a security report.
 ## Defense-in-depth recommendations
 
 - Run `python3 bin/ucw-audit.py --repo . --strict` in CI to catch any drift.
-- Keep `~/.claude/mcp.json` reviewed — every MCP server can run code.
+- Keep `~/.claude.json` (the user-scope MCP config Claude Code loads) reviewed — every MCP server can run code.
 - Don't commit transcripts or `.ucw/memory.sqlite` to git.

@@ -27,7 +27,7 @@ ucw-memory stats                 # counts, hit rate, embedding mode
 ## MCP server
 
 ```
-python -m ucw_memory.server      # stdio JSON-RPC; configure in ~/.claude/mcp.json
+python -m ucw_memory.server      # stdio JSON-RPC; register via `claude mcp add` (writes ~/.claude.json)
 ```
 
 See `mcp/ucw-memory.json` in the parent repo for the suggested config.

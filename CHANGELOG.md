@@ -5,6 +5,35 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Fixed — MCP server registered where Claude Code never read it
+
+`install.sh`'s `register_mcp()` wrote the `ucw-memory` server into
+`~/.claude/mcp.json`. Claude Code does **not** load that path — user-scope
+MCP servers live in `~/.claude.json`. The result: the memory server was a
+valid, runnable stdio server that never appeared in `/mcp`, so in-session
+`memory.recall` / `memory.note` / `memory.pin` (and `/ucw recall`, `/ucw
+pin`) were silently unavailable. Restarting never helped, because the
+config was in a file Claude Code doesn't read.
+
+Changes:
+
+- `register_mcp()` now writes the entry to `~/.claude.json` (via
+  `$CLAUDE_USER_CONFIG`), the file Claude Code actually loads at user
+  scope, merging in place to preserve everything else in that file.
+- It also **migrates off** the legacy `~/.claude/mcp.json`: drops our
+  entry and deletes the file if no other servers remain.
+- `uninstall` strips `ucw-memory` from both the live config and the
+  legacy file, and removes the legacy file if it's left empty.
+- `verify_install()` checks `~/.claude.json`.
+- `bin/ucw-audit.py` now scans `~/.claude.json` (the legacy path stays in
+  the scan list so a lingering stale file is still audited).
+- `agents/onboarder.md` instructs registering optional Obsidian/Notion
+  servers via `claude mcp add` (or `~/.claude.json`), never the dead path.
+- Docs (`SECURITY.md`, `memory/README.md`, `agents/security-reviewer.md`)
+  updated to point at `~/.claude.json`.
+
+Install/PEP-668 tests updated to assert on `~/.claude.json`.
+
 ### Changed — Streak breaker auto-runs verify itself instead of just nagging (PR H)
 
 Completes the trio (PR F: full gate suite at Stop; PR G: streak counts

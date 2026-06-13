@@ -188,7 +188,8 @@ def default_targets(repo_root: Path) -> list[Path]:
     home = Path.home()
     candidates = [
         home / ".claude" / "settings.json",
-        home / ".claude" / "mcp.json",
+        home / ".claude.json",          # user-scope MCP servers Claude Code loads
+        home / ".claude" / "mcp.json",  # legacy path; scanned if a stale file lingers
         home / ".claude" / "ucw" / "hooks",
         home / ".claude" / "rules" / "ucw",
         repo_root / "hooks",

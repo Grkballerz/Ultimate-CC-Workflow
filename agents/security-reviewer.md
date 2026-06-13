@@ -39,7 +39,7 @@ Synthesize:
 Scope = UCW's own config:
 - `~/.claude/settings.json`
 - `~/.claude/ucw/hooks/*`
-- `~/.claude/mcp.json`
+- `~/.claude.json` (user-scope MCP servers live here)
 - `~/.claude/rules/ucw/*`
 - agent and skill files in this repo
 
