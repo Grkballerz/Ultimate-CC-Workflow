@@ -7,6 +7,9 @@ __pycache__/
 # UCW runtime state
 .ucw/memory.sqlite*
 .ucw/*.log
+.ucw/state/edit-streak
+.ucw/state/last-session-start
+.ucw/state/distill-queue
 
 # Editor cruft
 .DS_Store
