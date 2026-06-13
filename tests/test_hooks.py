@@ -83,6 +83,38 @@ def test_pre_tool_use_blocks_force_push_to_main(project):
     assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+@pytest.mark.parametrize("command", [
+    "rm -rf /" + "*",                 # glob-on-root (built so this file is safe to grep)
+    "rm -fr /",                       # reordered short flags
+    "rm -rf $HOME",                   # env-var indirection to home
+    'rm -rf "$HOME"/x',               # quoted $HOME
+    "git push -f origin main",        # short force flag (was missed)
+    "git push -fu origin master",     # combined short flags
+    "git push origin main --force-with-lease",
+])
+def test_pre_tool_use_blocks_destructive_variants(project, command):
+    _rc, out, _ = _run("pre-tool-use.py", {
+        "cwd": str(project),
+        "tool_input": {"command": command},
+    })
+    body = json.loads(out)
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf node_modules",            # legitimate cleanup must not be blocked
+    "rm -rf /tmp/build",
+    "git push -f origin scratch",     # force-push to a non-main branch is allowed
+])
+def test_pre_tool_use_allows_legitimate_variants(project, command):
+    rc, out, _ = _run("pre-tool-use.py", {
+        "cwd": str(project),
+        "tool_input": {"command": command},
+    })
+    assert rc == 0
+    assert out == ""
+
+
 # ---- post-tool-use -----------------------------------------------------------
 
 def test_post_tool_use_increments_streak(project):

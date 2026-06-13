@@ -195,3 +195,23 @@ def test_not_a_git_repo_returns_error(tmp_path):
     # Error printed to stderr as JSON
     err_data = json.loads(err)
     assert err_data["error"] == "git command failed"
+
+
+# ---- base ref option-injection guard ---------------------------------------
+
+@pytest.mark.parametrize("bad_base", [
+    "--output=/tmp/pwned",   # git diff --output writes to an arbitrary file
+    "-f",
+    "--upload-pack=touch x",
+])
+def test_base_starting_with_dash_is_rejected(feature_branch, bad_base):
+    """A `--base` that could be parsed as a git flag must be refused, not
+    interpolated into a refspec (option-injection guard). The `--base=<v>`
+    form is used so argparse passes the dash value through to our validator
+    rather than rejecting it as a stray option itself."""
+    rc, _out, err = _run([f"--base={bad_base}"], cwd=feature_branch)
+    assert rc == 1
+    err_data = json.loads(err)
+    assert err_data["error"] == "invalid base ref"
+    # The dangerous value never reached git as a flag.
+    assert not (feature_branch / "tmp" / "pwned").exists()

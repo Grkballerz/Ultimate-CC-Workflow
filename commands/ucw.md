@@ -155,7 +155,11 @@ Two-pass security check of UCW's own config:
 2. Adversarial: invoke the **security-reviewer** subagent (three-role: attacker → defender → auditor)
 
 Exit non-zero on critical for CI use. Supports `audit-allow: <rule>` comments
-for illustrative examples in docs.
+for illustrative examples in docs. The token must name the rule being silenced
+(or `*` / `all` for every rule on the line) — a bare or mismatched token does
+not suppress. Suppression is only honored on UCW's own files, never on paths
+passed via `--target` (treated as untrusted), and a suppressed match is still
+reported as a visible `nit` so it never disappears silently.
 
 ---
 
