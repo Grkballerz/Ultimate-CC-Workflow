@@ -5,8 +5,10 @@ output, and best-effort logging to `.ucw/hooks.log` for debugging.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -108,3 +110,121 @@ def auto_retry_cap(payload: dict[str, Any]) -> int:
         except (OSError, ValueError):
             pass
     return 3
+
+
+# ---- no-progress circuit breaker ------------------------------------------
+# Both stop.py and post-tool-batch.py block when a verify gate fails. Without
+# a release valve, a failure the agent CAN'T fix (e.g. a pre-existing lint
+# error in a file the diff never touched, or a linter-version mismatch) traps
+# the agent forever: it can't end its turn, and each fix attempt is itself an
+# edit that re-arms the streak. The breaker detects "no progress" — the same
+# failure, byte-for-byte (modulo whitespace), N times in a row — and releases
+# so the agent can stop and hand the stuck failure to a human. Any change in
+# the failure output resets the counter, so a genuinely-progressing fix never
+# trips it early.
+
+_SIG_FILE = "verify-fail-sig.json"
+
+
+def break_after() -> int:
+    """How many identical consecutive failures before the breaker releases.
+
+    Default 3 (block twice, release on the third). Env override:
+    UCW_VERIFY_BREAK_AFTER. Values < 1 are ignored.
+    """
+    env = os.environ.get("UCW_VERIFY_BREAK_AFTER", "").strip()
+    if env.isdigit() and int(env) >= 1:
+        return int(env)
+    return 3
+
+
+def failure_signature(result: dict[str, Any]) -> str:
+    """Stable fingerprint of a verify failure: (failed_gate, normalized summary).
+
+    Only whitespace is normalized — line numbers and messages are kept, since a
+    change there means the agent made progress and the counter should reset.
+    """
+    gate = result.get("failed_gate") or "verify"
+    summary = re.sub(r"\s+", " ", (result.get("summary") or "")).strip()
+    raw = f"{gate}\n{summary[-1500:]}"
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _read_sig_state(payload: dict[str, Any]) -> dict[str, Any]:
+    sf = state_file(payload, _SIG_FILE)
+    if not sf.exists():
+        return {}
+    try:
+        data = json.loads(sf.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_sig_state(payload: dict[str, Any], data: dict[str, Any]) -> None:
+    sf = state_file(payload, _SIG_FILE)
+    sf.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic write (temp + replace) so a concurrent stop/batch write can't
+    # observe or clobber a half-written file and lose a counter increment.
+    tmp = sf.with_name(sf.name + f".{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, sf)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def record_failure_signature(payload: dict[str, Any], context: str, sig: str) -> int:
+    """Bump (or start) the consecutive-failure counter for `context`+`sig`.
+
+    Returns the new count (>= 1). A different sig resets the count to 1.
+    `context` separates callers that run different gate sets ("stop" vs "batch")
+    so their signatures don't collide.
+    """
+    data = _read_sig_state(payload)
+    entry = data.get(context) or {}
+    count = int(entry.get("count", 0)) + 1 if entry.get("sig") == sig else 1
+    data[context] = {"sig": sig, "count": count}
+    _write_sig_state(payload, data)
+    return count
+
+
+def reset_failure_signature(payload: dict[str, Any], context: str) -> None:
+    """Clear the counter for `context` (called on pass/skip/release)."""
+    data = _read_sig_state(payload)
+    if context in data:
+        del data[context]
+        _write_sig_state(payload, data)
+
+
+def write_stuck_verify(
+    payload: dict[str, Any], context: str, result: dict[str, Any], count: int
+) -> None:
+    """Record a released-but-still-failing gate to .ucw/state/stuck-verify.md
+    so the human sees what the breaker gave up on."""
+    sf = state_file(payload, "stuck-verify.md")
+    sf.parent.mkdir(parents=True, exist_ok=True)
+    gate = result.get("failed_gate") or "verify"
+    cmd = result.get("command") or "<no command>"
+    summary = (result.get("summary") or "").strip()[-1500:] or "(no output captured)"
+    body = (
+        f"# Stuck verify gate ({context})\n\n"
+        f"The `{gate}` gate (`{cmd}`) failed **identically {count} times in a "
+        f"row** with no change in output. UCW's circuit breaker released the "
+        f"Stop block so the agent could hand it off rather than loop forever.\n\n"
+        f"This is usually a **pre-existing failure** the current change didn't "
+        f"cause (or can't fix): a linter-version mismatch, a failure in an "
+        f"untouched file, or an out-of-scope issue. Review it, then either fix "
+        f"it or scope it out:\n\n"
+        f"- Drop a gate for this session: `UCW_VERIFY_GATES=tests` (or `lint,types`)\n"
+        f"- Skip auto-verify entirely: `UCW_SKIP_AUTO_VERIFY=1`\n"
+        f"- Raise the breaker threshold: `UCW_VERIFY_BREAK_AFTER=N`\n\n"
+        f"## Last failure output\n\n```\n{summary}\n```\n"
+    )
+    try:
+        sf.write_text(body, encoding="utf-8")
+    except OSError:
+        pass

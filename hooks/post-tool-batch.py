@@ -37,11 +37,19 @@ Detection notes:
   retries on. Otherwise the agent gets nagged to run vitest even when a
   typecheck is the more relevant check.
 
+A failure the agent can't fix (pre-existing lint, tool-version mismatch, an
+error in a file the diff never touched) would otherwise re-block every 5 edits
+forever. The shared no-progress circuit breaker (see `_hook_common`) releases
+the streak after the SAME failure repeats `UCW_VERIFY_BREAK_AFTER` times
+(default 3) and records it to `.ucw/state/stuck-verify.md`.
+
 Env toggles:
 - UCW_AUTO_STREAK_VERIFY=0  → disable auto-verify, fall back to the
                               old "agent must run something" block
 - UCW_STREAK_GATES=lint,types,tests  → override which gates run at the
                                         streak break (default: lint,types)
+- UCW_VERIFY_BREAK_AFTER=N  → identical failures before the breaker releases
+                              (default 3)
 """
 from __future__ import annotations
 
@@ -55,7 +63,19 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _hook_common import log, project_root, read_payload, state_file, ucw_dir, write_output
+from _hook_common import (
+    break_after,
+    failure_signature,
+    log,
+    project_root,
+    read_payload,
+    record_failure_signature,
+    reset_failure_signature,
+    state_file,
+    ucw_dir,
+    write_output,
+    write_stuck_verify,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -290,12 +310,14 @@ def main() -> int:
     # nothing it can run.
     if result.get("skipped"):
         _reset_streak(payload)
+        reset_failure_signature(payload, "batch")
         return 0
 
     if result.get("passed"):
         # Quietly reset and continue. The Stop hook still runs the FULL
         # gate suite (incl. tests) before the turn actually ends.
         _reset_streak(payload)
+        reset_failure_signature(payload, "batch")
         return 0
 
     # A gate failed. Block with the failure so the agent fixes it. Don't
@@ -306,12 +328,31 @@ def main() -> int:
     cmd = result.get("command") or "<no command>"
     elapsed = result.get("elapsed_ms", 0)
     summary = (result.get("summary") or "").strip()
+
+    # No-progress circuit breaker: if this exact gate failure has repeated
+    # unchanged too many times, the streak-break loop is trapping the agent on
+    # something it can't fix (pre-existing / out-of-scope). Release the streak
+    # so it can continue (the Stop hook is the final gate anyway), and record
+    # the stuck failure for the human.
+    cap_breaker = break_after()
+    fail_count = record_failure_signature(payload, "batch", failure_signature(result))
+    if fail_count >= cap_breaker:
+        write_stuck_verify(payload, "batch", result, fail_count)
+        reset_failure_signature(payload, "batch")
+        _reset_streak(payload)
+        log(payload,
+            f"circuit breaker released streak-break after {fail_count} identical "
+            f"{gate_label} failures — recorded to .ucw/state/stuck-verify.md")
+        return 0
+
     excerpt = summary[-1000:] if summary else "(no output captured)"
     reason = (
         f"UCW streak-break auto-verify: {gate_label} `{cmd}` failed "
         f"(exit {result.get('exit_code')}, {elapsed}ms). "
         f"Fix the failures below before continuing — the next edit batch "
-        f"that runs verify will reset the streak.\n\n"
+        f"that runs verify will reset the streak. (If you can't fix it — "
+        f"pre-existing or out of scope — this auto-releases after "
+        f"{cap_breaker} identical tries: {fail_count}/{cap_breaker}.)\n\n"
         f"{excerpt}"
     )
     write_output({

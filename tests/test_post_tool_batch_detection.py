@@ -498,6 +498,75 @@ def test_streak_break_logs_gate_outcomes(project):
     assert "types=FAIL" in log
 
 
+# ---- no-progress circuit breaker -------------------------------------------
+# An unfixable failure (pre-existing / out-of-scope) would otherwise re-block
+# every 5 edits forever. After UCW_VERIFY_BREAK_AFTER identical failures the
+# breaker releases the streak so the agent can keep going (Stop is still the
+# final gate) and records the stuck failure for the human.
+
+def test_streak_break_circuit_breaker_releases_after_identical_failures(project):
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'E501 line too long' >&2 && false\n"
+        "typecheck:\n\t@true\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("6")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    # Default threshold 3: first two identical failures block, streak preserved.
+    for _ in range(2):
+        rc, out, _err = _run(payload)
+        assert rc == 0
+        assert json.loads(out)["decision"] == "block"
+        assert _streak(project) == "6"
+
+    # Third identical failure → release: no block, streak reset, stuck recorded.
+    rc, out, _err = _run(payload)
+    assert rc == 0
+    assert out == "", f"breaker should release the streak silently, got: {out!r}"
+    assert _streak(project) == "0"
+    stuck = project / ".ucw" / "state" / "stuck-verify.md"
+    assert stuck.exists()
+    assert "E501 line too long" in stuck.read_text()
+
+
+def test_streak_break_circuit_breaker_resets_on_changed_failure(project):
+    """Changing failures = progress; the breaker must not release."""
+    mk = project / "Makefile"
+    (project / ".ucw" / "state" / "edit-streak").write_text("6")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    for msg in ["alpha problem", "beta problem", "alpha problem", "beta problem"]:
+        mk.write_text(f"lint:\n\t@echo '{msg}' >&2 && false\ntypecheck:\n\t@true\n")
+        _rc, out, _err = _run(payload)
+        assert json.loads(out)["decision"] == "block", f"{msg!r} should still block"
+    assert not (project / ".ucw" / "state" / "stuck-verify.md").exists()
+    assert _streak(project) == "6"
+
+
+def test_streak_break_circuit_breaker_threshold_env(project):
+    """UCW_VERIFY_BREAK_AFTER=1 releases on the first failure."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'unfixable' >&2 && false\ntypecheck:\n\t@true\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("6")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.py"}}],
+    }
+    rc, out, _err = _run(payload, extra_env={"UCW_VERIFY_BREAK_AFTER": "1"})
+    assert rc == 0
+    assert out == "", "break-after=1 must release on the first failure"
+    assert _streak(project) == "0"
+    assert (project / ".ucw" / "state" / "stuck-verify.md").exists()
+
+
 # ---- defensive: malformed payloads must not crash --------------------------
 
 def test_detector_handles_missing_batch_key(project):

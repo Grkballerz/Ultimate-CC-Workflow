@@ -18,6 +18,15 @@ Four jobs:
 4. **Skip override**: `UCW_SKIP_AUTO_VERIFY=1` falls back to the old blocking
    behavior (useful when tests are very slow or need orchestration the hook
    can't do — e.g. docker-compose up first).
+5. **No-progress circuit breaker (level 0/1 only)**: if the SAME failure
+   repeats unchanged `UCW_VERIFY_BREAK_AFTER` times (default 3), release the
+   Stop block instead of trapping the agent. A failure the diff can't fix
+   (pre-existing lint, tool-version mismatch, untouched-file error) would
+   otherwise loop forever: the agent can't Stop, and each fix attempt re-arms
+   the streak. On release we record the stuck failure to
+   `.ucw/state/stuck-verify.md` for the human. Level >= 2 is excluded — it has
+   its own retry-cap governor that intentionally hard-blocks for a human at
+   cap exhaustion (the autonomy contract).
 """
 from __future__ import annotations
 
@@ -32,11 +41,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _hook_common import (
     auto_mode_level,
     auto_retry_cap,
+    break_after,
+    failure_signature,
     log,
     project_root,
     read_payload,
+    record_failure_signature,
+    reset_failure_signature,
     state_file,
     write_output,
+    write_stuck_verify,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -212,6 +226,7 @@ def main() -> int:
         # Users can fix by adding a `test_runner` line to PREFERENCES.md or a
         # `test:` target to the Makefile.
         _clear_streak(payload)
+        reset_failure_signature(payload, "stop")
         log(payload, "auto-verify skipped (no runner) — allowing Stop")
         return 0
 
@@ -223,6 +238,7 @@ def main() -> int:
         # the right place).
         _clear_streak(payload)
         _reset_retry_count(payload)
+        reset_failure_signature(payload, "stop")
         _set_phase(payload, "verify")
 
         if level >= 3:
@@ -250,8 +266,19 @@ def main() -> int:
     gate = result.get("failed_gate") or "verify"
     gate_label = f"{gate} gate" if gate in {"lint", "types", "tests"} else gate
 
+    cap_breaker = break_after()
+
     if level >= 2:
-        # Level 2 retry loop: bump counter, decide whether to keep trying.
+        # Autonomous mode (level >= 2) has its OWN governor: the retry loop
+        # keeps the agent fixing until the cap, then hard-blocks for a human.
+        # That's the intended autonomy contract — we don't apply the
+        # no-progress breaker here (it would release silently when the user
+        # explicitly asked to be pulled in at cap exhaustion). The env escapes
+        # below still apply.
+        escape = (
+            " [Escape: drop the gate with UCW_VERIFY_GATES=tests, or set "
+            "UCW_SKIP_AUTO_VERIFY=1.]"
+        )
         cap = auto_retry_cap(payload)
         n = _bump_retry_count(payload)
         log(payload, f"auto-mode level {level}: {gate_label} FAILED, retry {n}/{cap}")
@@ -268,7 +295,7 @@ def main() -> int:
                 f"`/ucw auto on {level} --retry-cap N` or UCW_AUTO_RETRY_CAP=N.\n\n"
                 f"{excerpt}"
             )
-            write_output({"decision": "block", "reason": reason})
+            write_output({"decision": "block", "reason": reason + escape})
             return 0
         # Within budget — block with the failure so the agent retries.
         if result.get("timed_out"):
@@ -286,10 +313,33 @@ def main() -> int:
                 f"verifying until all gates pass or the cap is hit.\n\n"
                 f"{excerpt}"
             )
-        write_output({"decision": "block", "reason": reason})
+        write_output({"decision": "block", "reason": reason + escape})
         return 0
 
-    # Level 0 / 1 — existing hard-block behavior on failure.
+    # Level 0 / 1 — no retry cap and (historically) no release valve, so an
+    # unfixable failure (pre-existing lint, tool-version mismatch, an error in
+    # an untouched file) trapped the agent forever: it couldn't Stop, and each
+    # fix attempt re-armed the streak. The no-progress circuit breaker releases
+    # the Stop block once the SAME failure has repeated unchanged too many
+    # times, recording it for the human instead of looping.
+    fail_count = record_failure_signature(payload, "stop", failure_signature(result))
+    if fail_count >= cap_breaker:
+        write_stuck_verify(payload, "stop", result, fail_count)
+        reset_failure_signature(payload, "stop")
+        _clear_streak(payload)
+        _reset_retry_count(payload)
+        log(payload,
+            f"circuit breaker released Stop after {fail_count} identical "
+            f"{gate_label} failures — recorded to .ucw/state/stuck-verify.md")
+        return 0
+
+    # Escape-hatch hint appended to every block reason so the agent (and human)
+    # can always find the release valve — not just on the timeout path.
+    escape = (
+        f" [Escape: this {gate_label} failure auto-releases after {cap_breaker} "
+        f"identical tries ({fail_count}/{cap_breaker}); or drop the gate with "
+        f"UCW_VERIFY_GATES=tests, or set UCW_SKIP_AUTO_VERIFY=1.]"
+    )
     if result.get("timed_out"):
         reason = (
             f"UCW auto-verify: {gate_label} `{cmd}` TIMED OUT after {elapsed}ms. "
@@ -304,7 +354,7 @@ def main() -> int:
             f"Fix the failures below, then Stop will pass.\n\n"
             f"{excerpt}"
         )
-    write_output({"decision": "block", "reason": reason})
+    write_output({"decision": "block", "reason": reason + escape})
     return 0
 
 
