@@ -1,6 +1,6 @@
 ---
 description: UCW root command. All UCW workflows live under here as subcommands to avoid colliding with Claude Code built-ins (/plan, /init, /review are reserved).
-argument-hint: "<subcommand> [args]   |   status | init | plan | ship | review | audit | recall | pin | scribe | distill | dashboard | watch | unwatch | worktree | phase | prefs | auto | help"
+argument-hint: "<subcommand> [args]   |   status | init | plan | ship | review | audit | ask | recall | pin | scribe | distill | dashboard | watch | unwatch | worktree | phase | prefs | auto | help"
 ---
 
 Arguments: $ARGUMENTS
@@ -21,6 +21,7 @@ ucw <sub> [args...]
   ship [flags]        verify + reviewer + land (commit/push/PR)
   review [flags]      cross-audit code review (narrow scope + disprover + reachability)
   audit               deterministic security scan + adversarial reviewer
+  ask <question>      repo-oracle subagent — answer questions about this repo
   recall <query>      memory.recall via the MCP server
   pin <fact>          memory.pin
   scribe              refresh .ucw/knowledge/* from the latest diff
@@ -160,6 +161,27 @@ for illustrative examples in docs. The token must name the rule being silenced
 not suppress. Suppression is only honored on UCW's own files, never on paths
 passed via `--target` (treated as untrusted), and a suppressed match is still
 reported as a visible `nit` so it never disappears silently.
+
+---
+
+## ask <question>
+
+The "brains of the repo" — answer a question about THIS project, grounded in
+the curated Knowledge docs, memory, and the actual code (not generic
+knowledge). The question is the rest of $ARGUMENTS after the `ask` token.
+
+1. Prime memory: `mcp__ucw-memory__memory.recall` with `query` = the question,
+   `k=8`, `budget_chars=3000`, `scope=all`. (The subagent recalls again with
+   its own framing, but seeding here surfaces obvious hits up front.)
+2. Invoke the **repo-oracle** subagent with the verbatim question. It reads
+   `.ucw/knowledge/INDEX.md` → relevant docs, recalls memory, greps/reads the
+   code, and checks git history as needed — read-only throughout.
+3. Print its answer verbatim: the direct answer, the cited **Evidence**,
+   **Confidence**, and the **Couldn't determine** list.
+
+This is a read-only query path — it never enters a workflow phase, never
+edits, and never touches `.ucw/state`. If the oracle reports a Knowledge doc
+is stale (docs disagree with code), suggest `/ucw scribe` to the user.
 
 ---
 
