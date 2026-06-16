@@ -529,3 +529,33 @@ def test_post_tool_use_rejects_relative_escape(project):
     assert out == ""
     streak_file = project / ".ucw" / "state" / "edit-streak"
     assert not streak_file.exists() or streak_file.read_text().strip() == "0"
+
+
+# ---- stop: missing tooling is skipped, not blocked --------------------------
+
+def test_stop_missing_tooling_does_not_block(project):
+    """A gate failing because its tooling isn't installed (eslint not found)
+    must not block Stop — there are no lint errors to fix."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'sh: 1: eslint: not found' >&2; exit 1\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    assert out == "", f"missing tooling must allow Stop, got: {out!r}"
+    # streak cleared, phase advanced — the agent moves on
+    assert not (project / ".ucw" / "state" / "edit-streak").exists()
+
+
+def test_stop_missing_tooling_auto_installs_at_level_2(project):
+    """At auto-level >= 2 the Stop hook passes --auto-install, so verify runs
+    the install command and retries the gate instead of skipping."""
+    (project / "Makefile").write_text(
+        "install:\n\t@touch .deps-installed\n"
+        "lint:\n\t@test -f .deps-installed || (echo 'sh: 1: eslint: not found' >&2; exit 1)\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _stop_with_env(project, {"UCW_AUTO_MODE": "2"})
+    assert (project / ".deps-installed").exists(), "auto-install should have run"
+    assert out == "", f"install+retry then pass should allow Stop, got: {out!r}"

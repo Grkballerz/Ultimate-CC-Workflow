@@ -28,6 +28,14 @@ Behavior:
   per-gate detail and `failed_gate: "lint"|"types"|"tests"|null`.
 - `UCW_VERIFY_GATES=tests` (comma-separated) limits which gates run — useful
   to opt out of lint/types if a project intentionally skips them.
+- Missing tooling vs. real failure: a gate exiting non-zero because its
+  binary/deps aren't installed (e.g. `eslint: not found`, `node_modules
+  missing`) is NOT a gate failure — there are no errors to fix. With
+  `--auto-install` the project's install command (`make install`, or
+  `<pm> install` from a lockfile) runs once and the gate is retried; without
+  it the gate is setup-skipped (passed, with a `setup_hint`) so the agent
+  isn't told to fix nonexistent lint errors. `setup_skipped`/`setup_hint`
+  appear at the top level when this happens.
 
 Exit codes (CLI):
 - 0 if all (non-skipped) gates pass
@@ -175,6 +183,52 @@ def _detect_stack(project_root: Path) -> dict[str, Any] | None:
         return data if isinstance(data, dict) else None
     except json.JSONDecodeError:
         return None
+
+
+# ---- missing-tooling detection + install ----------------------------------
+# A gate exiting non-zero means one of two very different things: the tool RAN
+# and found problems (the agent should fix them), or the tool ISN'T INSTALLED
+# (an environment problem — there are no lint errors to fix). These patterns
+# identify the latter so we don't tell the agent to "fix the lint failures"
+# when `node_modules` is simply missing. Conservative on purpose: a bare
+# `ELIFECYCLE`/`exit code 1` is NOT enough (that's how a real lint failure
+# exits too) — we require positive evidence the binary/module is absent.
+_MISSING_TOOLING_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^sh: \d+: [^:]+: not found", re.MULTILINE),    # POSIX sh
+    re.compile(r"\bcommand not found\b"),                       # bash/zsh
+    re.compile(r"\bnode_modules missing\b"),                    # pnpm warn
+    re.compile(r"\bis not recognized as an internal or external command\b"),  # win
+    re.compile(r"\bnpm ERR!.*\benoent\b", re.IGNORECASE),       # npm missing
+    re.compile(r"\bexecutable not found\b", re.IGNORECASE),
+)
+# NOTE: deliberately NOT matching "Cannot find module" — a broken import in
+# app/test code emits that too, and we must not silently skip a real failure.
+# `node_modules missing` / `command not found` already cover genuinely-absent
+# deps without that overlap.
+
+
+def _looks_like_missing_tooling(output: str) -> bool:
+    """True if a gate's output indicates the tool/deps aren't installed
+    (vs. the tool running and reporting real problems)."""
+    return any(p.search(output or "") for p in _MISSING_TOOLING_PATTERNS)
+
+
+def _install_command(project_root: Path) -> list[str] | None:
+    """Best-effort command to install the project's dependencies.
+
+    Makefile `install` target wins (explicit project intent); otherwise the JS
+    package manager's install from a detected lockfile. Returns None when we
+    can't safely guess — we never invent an install command.
+    """
+    if _has_makefile_target(project_root, "install"):
+        return ["make", "install"]
+    if (project_root / "package.json").exists() and any(
+        (project_root / lock).exists()
+        for lock in ("pnpm-lock.yaml", "yarn.lock", "package-lock.json",
+                     "bun.lockb", "bun.lock")
+    ):
+        return [_package_manager(project_root), "install"]
+    return None
 
 
 # ---- per-gate selection ---------------------------------------------------
@@ -331,6 +385,11 @@ def _run_one(
         "exit_code": cp.returncode,
         "elapsed_ms": elapsed_ms,
         "timed_out": False,
+        # A non-zero exit whose output says the binary/module is missing is an
+        # environment problem, not a gate failure — flag it so the caller can
+        # install + retry (auto-mode) or skip with a hint instead of telling
+        # the agent to "fix the lint failures" that don't exist.
+        "tooling_missing": cp.returncode != 0 and _looks_like_missing_tooling(combined),
         "summary": tail or ("(no output)" if cp.returncode == 0 else "non-zero exit, no output"),
     }
 
@@ -362,6 +421,27 @@ def _last_gate_summary(gates: list[dict[str, Any]]) -> dict[str, Any]:
     return gates[-1]
 
 
+def _setup_skip(result: dict[str, Any], gate_name: str,
+                install_cmd: list[str] | None) -> dict[str, Any]:
+    """Convert a 'tooling not installed' gate result into a transparent skip
+    (passed, doesn't fail the suite) carrying an actionable hint."""
+    hint = (
+        f"{gate_name} gate skipped — its tooling isn't installed "
+        f"(`{result.get('command')}` reported a missing binary/module, not "
+        f"lint/type errors). "
+    )
+    hint += (f"Run `{' '.join(install_cmd)}` to enable it."
+             if install_cmd else
+             "Install the project's dependencies to enable it.")
+    result.update({
+        "passed": True,
+        "skipped": True,
+        "setup_skipped": True,
+        "setup_hint": hint,
+    })
+    return result
+
+
 def run_verification(
     project_root: Path,
     *,
@@ -369,12 +449,17 @@ def run_verification(
     command: list[str] | None = None,
     only: list[str] | None = None,
     run_all: bool = False,
+    auto_install: bool = False,
+    install_timeout: int = 300,
 ) -> dict[str, Any]:
     """Run the gate suite (or a single explicit command).
 
     `command` short-circuits gate detection — single-command back-compat.
     `only` restricts to a subset of gates (e.g. ["tests"]).
     `run_all` continues past the first failure instead of stopping.
+    `auto_install` — when a gate fails because its tooling isn't installed,
+    run the project's install command ONCE and retry that gate (used in
+    auto-mode). Otherwise such a gate is setup-skipped, not failed.
     """
     if command is not None:
         single = _run_one(project_root, command, timeout=timeout)
@@ -393,17 +478,45 @@ def run_verification(
             ".ucw/knowledge/PREFERENCES.md, add make targets, or add package.json scripts"
         )
 
+    install_cmd = _install_command(project_root)
+    installed = False  # run the install command at most once per suite
     gates: list[dict[str, Any]] = []
     for step in plan:
         result = _run_one(project_root, step["command"], timeout=timeout)
         result["name"] = step["name"]
         result["source"] = step["source"]
+
+        if result.get("tooling_missing"):
+            # Tool/deps not installed. On auto-mode, install once and retry
+            # this gate; otherwise skip it (don't nag about errors that the
+            # tool never actually got to report).
+            if auto_install and not installed and install_cmd:
+                inst = _run_one(project_root, install_cmd, timeout=install_timeout)
+                installed = True
+                result["install"] = {
+                    "command": inst.get("command"),
+                    "passed": inst.get("passed"),
+                    "summary": inst.get("summary", "")[-500:],
+                }
+                if inst.get("passed"):
+                    retry = _run_one(project_root, step["command"], timeout=timeout)
+                    retry["name"] = step["name"]
+                    retry["source"] = step["source"]
+                    retry["install"] = result["install"]
+                    result = retry
+            # If still missing (no auto-install, install unavailable, install
+            # failed, or retry still can't find the tool) → setup-skip.
+            if result.get("tooling_missing"):
+                _setup_skip(result, step["name"], install_cmd)
+
         gates.append(result)
         if not result["passed"] and not run_all:
             break
 
     top = _last_gate_summary(gates)
     failed = next((g["name"] for g in gates if not g["passed"]), None)
+    setup_skipped = [g["name"] for g in gates if g.get("setup_skipped")]
+    setup_hint = next((g.get("setup_hint") for g in gates if g.get("setup_skipped")), None)
     return {
         "passed": all(g["passed"] for g in gates),
         "command": top.get("command"),
@@ -414,6 +527,8 @@ def run_verification(
         "source": top.get("source", ""),
         "gates": gates,
         "failed_gate": failed,
+        "setup_skipped": setup_skipped,
+        "setup_hint": setup_hint,
     }
 
 
@@ -448,6 +563,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gates", help="comma-separated subset: lint,types,tests (env UCW_VERIFY_GATES)")
     parser.add_argument("--all", action="store_true",
                         help="run every gate even after a failure (default: stop at first failure)")
+    parser.add_argument("--auto-install", action="store_true",
+                        help="if a gate's tooling isn't installed, run the project's install "
+                             "command once and retry (else such a gate is skipped, not failed)")
     parser.add_argument("--json", action="store_true", help="emit JSON (default behavior)")
     args = parser.parse_args(argv)
 
@@ -462,7 +580,7 @@ def main(argv: list[str] | None = None) -> int:
 
     result = run_verification(
         project_root, timeout=args.timeout, command=command,
-        only=only, run_all=args.all,
+        only=only, run_all=args.all, auto_install=args.auto_install,
     )
     json.dump(result, sys.stdout, indent=2)
     sys.stdout.write("\n")
