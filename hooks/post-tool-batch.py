@@ -64,6 +64,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _hook_common import (
+    auto_mode_level,
     break_after,
     failure_signature,
     log,
@@ -223,10 +224,16 @@ def _run_auto_verify(payload: dict, gates: list[str]) -> dict | None:
         log(payload, "auto-verify: ucw-verify.py not found")
         return None
     project = project_root(payload)
+    cmd = [sys.executable, str(verify), "--repo", str(project),
+           "--gates", ",".join(gates)]
+    # Auto-mode (level >= 2): if a gate's tooling isn't installed, let verify
+    # install deps once and retry instead of skipping. Off auto, missing
+    # tooling is skipped with a hint (verify's default).
+    if auto_mode_level(payload) >= 2:
+        cmd.append("--auto-install")
     try:
         cp = subprocess.run(
-            [sys.executable, str(verify), "--repo", str(project),
-             "--gates", ",".join(gates)],
+            cmd,
             capture_output=True, text=True, timeout=300,
             env=os.environ.copy(),
         )
@@ -314,10 +321,21 @@ def main() -> int:
         return 0
 
     if result.get("passed"):
-        # Quietly reset and continue. The Stop hook still runs the FULL
-        # gate suite (incl. tests) before the turn actually ends.
         _reset_streak(payload)
         reset_failure_signature(payload, "batch")
+        # If a gate was skipped because its tooling isn't installed, surface a
+        # NON-blocking hint so the agent knows the gate didn't really run (and
+        # how to enable it) — but don't trap it. The Stop hook still runs the
+        # full suite before the turn ends.
+        hint = result.get("setup_hint")
+        if hint:
+            log(payload, f"setup-skip: {result.get('setup_skipped')}")
+            write_output({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolBatch",
+                    "additionalContext": f"⚠️ {hint}",
+                }
+            })
         return 0
 
     # A gate failed. Block with the failure so the agent fixes it. Don't

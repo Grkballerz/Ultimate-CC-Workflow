@@ -660,3 +660,45 @@ def test_detector_ignores_test_command_in_path_field(project):
     assert _streak(project) == "3", (
         "file_path key is path-like — must be skipped by the scanner"
     )
+
+
+# ---- missing tooling: skip-with-hint (default) / auto-install (auto-mode) ---
+
+def test_streak_break_missing_tooling_skips_with_hint_not_block(project):
+    """eslint-not-found (deps missing) must NOT block as a lint failure — it
+    emits a non-blocking hint and resets the streak so the agent moves on."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'sh: 1: eslint: not found' >&2; exit 1\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("6")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.ts"}}],
+    }
+    rc, out, _err = _run(payload)
+    assert rc == 0
+    body = json.loads(out)
+    assert "decision" not in body, "missing tooling must not block"
+    assert "install" in body["hookSpecificOutput"]["additionalContext"].lower()
+    assert _streak(project) == "0"
+
+
+def test_streak_break_missing_tooling_auto_installs_at_level_2(project):
+    """In auto-mode (level >= 2) the hook passes --auto-install, so verify runs
+    the install command and the gate then passes (silently)."""
+    (project / "Makefile").write_text(
+        "install:\n\t@touch .deps-installed\n"
+        "lint:\n\t@test -f .deps-installed || (echo 'sh: 1: eslint: not found' >&2; exit 1)\n"
+    )
+    (project / ".ucw" / "state" / "edit-streak").write_text("6")
+    payload = {
+        "cwd": str(project),
+        "tools": [{"tool_name": "Edit",
+                   "tool_input": {"file_path": "/repo/src/app.ts"}}],
+    }
+    rc, out, _err = _run(payload, extra_env={"UCW_AUTO_MODE": "2"})
+    assert rc == 0
+    assert (project / ".deps-installed").exists(), "auto-install should have run"
+    assert out == "", f"successful install+retry should pass silently, got: {out!r}"
+    assert _streak(project) == "0"

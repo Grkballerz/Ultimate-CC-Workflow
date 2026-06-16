@@ -157,9 +157,14 @@ def _run_auto_verify(payload: dict) -> dict | None:
         return None
     project = project_root(payload)
     # Inherit UCW_VERIFY_TIMEOUT from the hook env; ucw-verify reads it itself
+    cmd = [sys.executable, str(verify), "--repo", str(project)]
+    # Auto-mode (level >= 2): install missing tooling once and retry rather
+    # than skipping the gate. Off auto, verify setup-skips it with a hint.
+    if auto_mode_level(payload) >= 2:
+        cmd.append("--auto-install")
     try:
         cp = subprocess.run(
-            [sys.executable, str(verify), "--repo", str(project)],
+            cmd,
             capture_output=True, text=True, timeout=300,  # outer cap
             env=os.environ.copy(),
         )
@@ -240,6 +245,11 @@ def main() -> int:
         _reset_retry_count(payload)
         reset_failure_signature(payload, "stop")
         _set_phase(payload, "verify")
+
+        if result.get("setup_hint"):
+            # A gate couldn't run because its tooling isn't installed; we didn't
+            # block on it. Record why so it's not mistaken for a clean pass.
+            log(payload, f"setup-skip ({result.get('setup_skipped')}): {result.get('setup_hint')}")
 
         if level >= 3:
             # Level 3 auto-ship: don't just allow Stop — block with a nudge
