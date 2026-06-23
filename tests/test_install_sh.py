@@ -77,7 +77,7 @@ def test_standard_profile_installs_hooks(fake_home):
     assert (hooks_dir / "session-start.py").exists()
     assert (hooks_dir / "post-tool-use.py").exists()
     # MCP server registered
-    mcp = json.loads((fake_home / ".claude" / "mcp.json").read_text())
+    mcp = json.loads((fake_home / ".claude.json").read_text())
     assert "ucw-memory" in mcp["mcpServers"]
 
 
@@ -101,8 +101,8 @@ def test_uninstall_removes_directories(fake_home):
     assert rc == 0
     assert not (fake_home / ".claude" / "rules" / "ucw").exists()
     # MCP entry should be gone
-    if (fake_home / ".claude" / "mcp.json").exists():
-        mcp = json.loads((fake_home / ".claude" / "mcp.json").read_text())
+    if (fake_home / ".claude.json").exists():
+        mcp = json.loads((fake_home / ".claude.json").read_text())
         assert "ucw-memory" not in mcp.get("mcpServers", {})
 
 

@@ -345,3 +345,107 @@ def test_select_command_back_compat_returns_tests(tmp_path):
     cmd, source = mod.select_command(tmp_path)
     assert cmd == ["make", "test"]
     assert source == "makefile:test"
+
+
+# ---- missing-tooling: classify, skip, and auto-install ---------------------
+# A gate exiting non-zero because its binary/deps aren't installed (eslint not
+# found, node_modules missing) is NOT a fixable gate failure. It must be
+# classified separately so the agent isn't told to "fix the lint failures".
+
+def test_looks_like_missing_tooling_matches_eslint_not_found():
+    mod = _load()
+    assert mod._looks_like_missing_tooling("sh: 1: eslint: not found")
+    assert mod._looks_like_missing_tooling(
+        "WARN Local package.json exists, but node_modules missing")
+    assert mod._looks_like_missing_tooling("bash: eslint: command not found")
+
+
+def test_looks_like_missing_tooling_ignores_real_failures():
+    mod = _load()
+    # A real lint failure exits non-zero too — must NOT be treated as missing.
+    assert not mod._looks_like_missing_tooling(
+        "src/app.ts(12,3): error: 'x' is never used\nELIFECYCLE Command failed with exit code 1.")
+    assert not mod._looks_like_missing_tooling("3 problems (3 errors, 0 warnings)")
+    # A broken import in app/test code emits "Cannot find module" — that's a
+    # REAL bug the agent should fix, never a setup-skip. (Regression guard.)
+    assert not mod._looks_like_missing_tooling(
+        "FAIL src/foo.test.ts\n  Error: Cannot find module './missing' from 'src/foo.ts'")
+
+
+def test_run_one_flags_tooling_missing(tmp_path):
+    mod = _load()
+    res = mod._run_one(
+        tmp_path, ["sh", "-c", "echo 'sh: 1: eslint: not found' >&2; exit 1"], timeout=10)
+    assert res["passed"] is False
+    assert res["tooling_missing"] is True
+
+
+def test_run_one_real_failure_not_flagged(tmp_path):
+    mod = _load()
+    res = mod._run_one(tmp_path, ["sh", "-c", "echo 'lint: 3 errors'; exit 1"], timeout=10)
+    assert res["passed"] is False
+    assert res["tooling_missing"] is False
+
+
+def test_install_command_prefers_makefile_install(tmp_path):
+    mod = _load()
+    (tmp_path / "Makefile").write_text("install:\n\t@true\n")
+    assert mod._install_command(tmp_path) == ["make", "install"]
+
+
+def test_install_command_uses_lockfile_package_manager(tmp_path):
+    mod = _load()
+    (tmp_path / "package.json").write_text("{}")
+    (tmp_path / "pnpm-lock.yaml").write_text("")
+    assert mod._install_command(tmp_path) == ["pnpm", "install"]
+
+
+def test_install_command_none_when_unknown(tmp_path):
+    mod = _load()
+    assert mod._install_command(tmp_path) is None
+
+
+def test_missing_tooling_setup_skips_without_auto_install(tmp_path):
+    """Default (no auto-install): a missing-tooling gate is skipped, not failed,
+    and the suite still passes with an actionable hint."""
+    mod = _load()
+    (tmp_path / "Makefile").write_text(
+        "lint:\n\t@echo 'sh: 1: eslint: not found' >&2; exit 1\n"
+        "test:\n\t@true\n"
+    )
+    result = mod.run_verification(tmp_path, timeout=10)
+    assert result["passed"] is True, "missing tooling must not fail the suite"
+    assert "lint" in result["setup_skipped"]
+    assert result["failed_gate"] is None
+    assert "install" in (result["setup_hint"] or "").lower()
+    lint_gate = next(g for g in result["gates"] if g["name"] == "lint")
+    assert lint_gate.get("setup_skipped") is True
+
+
+def test_missing_tooling_auto_installs_then_passes(tmp_path):
+    """With auto_install: run the install command once, then retry the gate.
+    The lint target fails (tool 'missing') until `make install` drops a marker."""
+    mod = _load()
+    marker = tmp_path / ".deps-installed"
+    (tmp_path / "Makefile").write_text(
+        "install:\n\t@touch .deps-installed\n"
+        "lint:\n\t@test -f .deps-installed || (echo 'sh: 1: eslint: not found' >&2; exit 1)\n"
+    )
+    result = mod.run_verification(tmp_path, timeout=10, auto_install=True)
+    assert marker.exists(), "install command should have run"
+    assert result["passed"] is True
+    assert result["setup_skipped"] == []
+    lint_gate = next(g for g in result["gates"] if g["name"] == "lint")
+    assert lint_gate.get("tooling_missing") in (False, None)
+    assert lint_gate.get("install", {}).get("passed") is True
+
+
+def test_missing_tooling_auto_install_unavailable_falls_back_to_skip(tmp_path):
+    """auto_install on, but no install command can be detected → setup-skip."""
+    mod = _load()
+    (tmp_path / "Makefile").write_text(
+        "lint:\n\t@echo 'sh: 1: eslint: not found' >&2; exit 1\n"
+    )
+    result = mod.run_verification(tmp_path, timeout=10, auto_install=True)
+    assert result["passed"] is True
+    assert "lint" in result["setup_skipped"]

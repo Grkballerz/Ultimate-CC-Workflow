@@ -20,6 +20,11 @@ set -euo pipefail
 UCW_HOME="${UCW_HOME:-$HOME/.claude/ucw}"
 CLAUDE_HOME="${CLAUDE_HOME:-$HOME/.claude}"
 CLAUDE_SETTINGS="$CLAUDE_HOME/settings.json"
+# Claude Code reads user-scope MCP servers from ~/.claude.json — NOT from
+# ~/.claude/mcp.json (a path Claude Code never loads). register_mcp writes here.
+CLAUDE_USER_CONFIG="${CLAUDE_USER_CONFIG:-$HOME/.claude.json}"
+# Legacy location earlier installs wrote to; we now migrate entries off it.
+LEGACY_MCP_CONFIG="$CLAUDE_HOME/mcp.json"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROFILE=""
@@ -271,13 +276,6 @@ PYEOF
 }
 
 register_mcp() {
-  local mcp_config="$CLAUDE_HOME/mcp.json"
-  if (( DRY_RUN )); then
-    log "[DRY] would register ucw-memory in $mcp_config (command: ${UCW_PYTHON:-python3})"
-    return
-  fi
-  [[ -f "$mcp_config" ]] || echo '{"mcpServers":{}}' > "$mcp_config"
-
   # Use the python that actually has ucw_memory installed, or fall back to
   # system python3 with PYTHONPATH so the user gets *something* working.
   local cmd="${UCW_PYTHON:-python3}"
@@ -286,10 +284,34 @@ register_mcp() {
     # Fallback path: rely on PYTHONPATH (won't load the [mcp] extras but
     # the stdlib server will still work).
     pythonpath_env='{"PYTHONPATH":"'"$REPO_ROOT/memory"'"}'
-    warn "ucw-memory not properly installed; falling back to PYTHONPATH in mcp.json"
+    warn "ucw-memory not properly installed; falling back to PYTHONPATH"
     warn "for a working install, ensure python3-venv is available and re-run"
   fi
 
+  if (( DRY_RUN )); then
+    log "[DRY] would register ucw-memory in $CLAUDE_USER_CONFIG (command: $cmd)"
+    return
+  fi
+
+  # Migrate off the legacy ~/.claude/mcp.json that Claude Code never reads.
+  # Drop our entry there; remove the file if it's left with no servers.
+  if [[ -f "$LEGACY_MCP_CONFIG" ]]; then
+    local ltmp
+    ltmp="$(mktemp)"
+    if jq 'del(.mcpServers["ucw-memory"])' "$LEGACY_MCP_CONFIG" > "$ltmp" 2>/dev/null; then
+      mv "$ltmp" "$LEGACY_MCP_CONFIG"
+      if [[ "$(jq -r '.mcpServers | length' "$LEGACY_MCP_CONFIG" 2>/dev/null)" == "0" ]]; then
+        rm -f "$LEGACY_MCP_CONFIG"
+        log "removed stale $LEGACY_MCP_CONFIG (Claude Code never read it)"
+      fi
+    else
+      rm -f "$ltmp"
+    fi
+  fi
+
+  # Write the entry where Claude Code actually loads user-scope servers:
+  # ~/.claude.json. Merge in place, preserving everything else in that file.
+  [[ -f "$CLAUDE_USER_CONFIG" ]] || echo '{}' > "$CLAUDE_USER_CONFIG"
   local tmp
   tmp="$(mktemp)"
   jq \
@@ -302,9 +324,9 @@ register_mcp() {
         args: ["-m", "ucw_memory.server"],
         env: ({"UCW_MEMORY_HOME": $ucw_home} + $extra_env)
      }' \
-     "$mcp_config" > "$tmp"
-  mv "$tmp" "$mcp_config"
-  log "registered ucw-memory MCP server (command: $cmd)"
+     "$CLAUDE_USER_CONFIG" > "$tmp"
+  mv "$tmp" "$CLAUDE_USER_CONFIG"
+  log "registered ucw-memory MCP server in $CLAUDE_USER_CONFIG (command: $cmd)"
 }
 
 apply_profile() {
@@ -328,9 +350,9 @@ verify_install() {
   [[ -L "$CLAUDE_HOME/commands/ucw.md" ]] || { warn "/ucw command not linked"; ok=0; }
   [[ -L "$CLAUDE_HOME/agents/planner.md" ]] || { warn "planner agent not linked"; ok=0; }
   command -v jq >/dev/null 2>&1 || { warn "jq missing — settings merges will fail"; ok=0; }
-  if [[ -f "$CLAUDE_HOME/mcp.json" ]]; then
-    jq -e '.mcpServers["ucw-memory"]' "$CLAUDE_HOME/mcp.json" >/dev/null 2>&1 || {
-      warn "ucw-memory MCP server not registered"; ok=0;
+  if [[ -f "$CLAUDE_USER_CONFIG" ]]; then
+    jq -e '.mcpServers["ucw-memory"]' "$CLAUDE_USER_CONFIG" >/dev/null 2>&1 || {
+      warn "ucw-memory MCP server not registered in $CLAUDE_USER_CONFIG"; ok=0;
     }
   fi
   if (( ok )); then
@@ -369,13 +391,22 @@ uninstall() {
       --uninstall --inplace "$CLAUDE_SETTINGS" \
       2>/dev/null || warn "could not strip UCW entries from $CLAUDE_SETTINGS"
   fi
-  # Strip ucw-memory MCP entry
-  if [[ -f "$CLAUDE_HOME/mcp.json" && $DRY_RUN -eq 0 ]]; then
-    local tmp
-    tmp="$(mktemp)"
-    jq 'del(.mcpServers["ucw-memory"])' "$CLAUDE_HOME/mcp.json" > "$tmp" 2>/dev/null \
-      || cp "$CLAUDE_HOME/mcp.json" "$tmp"
-    mv "$tmp" "$CLAUDE_HOME/mcp.json"
+  # Strip ucw-memory MCP entry from both the live config (~/.claude.json) and
+  # the legacy ~/.claude/mcp.json that older installs wrote to.
+  if (( DRY_RUN == 0 )); then
+    local cfg tmp
+    for cfg in "$CLAUDE_USER_CONFIG" "$LEGACY_MCP_CONFIG"; do
+      [[ -f "$cfg" ]] || continue
+      tmp="$(mktemp)"
+      jq 'del(.mcpServers["ucw-memory"])' "$cfg" > "$tmp" 2>/dev/null \
+        || cp "$cfg" "$tmp"
+      mv "$tmp" "$cfg"
+    done
+    # Drop the legacy file entirely if it no longer holds any servers.
+    if [[ -f "$LEGACY_MCP_CONFIG" \
+          && "$(jq -r '.mcpServers | length' "$LEGACY_MCP_CONFIG" 2>/dev/null)" == "0" ]]; then
+      rm -f "$LEGACY_MCP_CONFIG"
+    fi
   fi
   log "done. memory db at $UCW_HOME left intact — rm -rf $UCW_HOME to fully purge."
 }

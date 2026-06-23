@@ -76,7 +76,7 @@ def test_install_creates_venv_with_ucw_memory(fake_home):
 def test_mcp_json_command_points_at_venv_python(fake_home):
     rc, _, _ = _run("--profile", "minimal", fake_home=fake_home)
     assert rc == 0
-    mcp = json.loads((fake_home / ".claude" / "mcp.json").read_text())
+    mcp = json.loads((fake_home / ".claude.json").read_text())
     cmd = mcp["mcpServers"]["ucw-memory"]["command"]
     expected = str(_venv_python(fake_home))
     assert cmd == expected, (
@@ -89,7 +89,7 @@ def test_mcp_json_command_points_at_venv_python(fake_home):
 @pytest.mark.skipif(not _has("jq"), reason="jq required by installer")
 def test_mcp_json_env_sets_ucw_memory_home(fake_home):
     _run("--profile", "minimal", fake_home=fake_home)
-    mcp = json.loads((fake_home / ".claude" / "mcp.json").read_text())
+    mcp = json.loads((fake_home / ".claude.json").read_text())
     env = mcp["mcpServers"]["ucw-memory"]["env"]
     assert env["UCW_MEMORY_HOME"] == str(fake_home / ".claude" / "ucw")
 
@@ -144,10 +144,10 @@ def test_idempotent_reinstall_keeps_venv_command_correct(fake_home):
     """Running install twice in a row should leave mcp.json with the same
     absolute venv command path — no drift back to bare 'python3'."""
     _run("--profile", "minimal", fake_home=fake_home)
-    mcp_first = json.loads((fake_home / ".claude" / "mcp.json").read_text())
+    mcp_first = json.loads((fake_home / ".claude.json").read_text())
 
     _run("--profile", "minimal", fake_home=fake_home)
-    mcp_second = json.loads((fake_home / ".claude" / "mcp.json").read_text())
+    mcp_second = json.loads((fake_home / ".claude.json").read_text())
 
     assert mcp_first["mcpServers"]["ucw-memory"] == mcp_second["mcpServers"]["ucw-memory"]
     assert "venv/bin/python" in mcp_second["mcpServers"]["ucw-memory"]["command"]

@@ -1,0 +1,55 @@
+{
+  "stack": {
+    "languages": ["Python 3.11+"],
+    "runtimes": ["python3 (3.12 in CI)"],
+    "package_managers": ["pip", "setuptools"],
+    "frameworks": [],
+    "test_runners": ["pytest"],
+    "linters": ["ruff"],
+    "formatters": ["ruff"],
+    "datastores": ["SQLite (stdlib FTS5, optional sqlite-vec)"],
+    "deploy_targets": [],
+    "key_libraries": [
+      "pytest",
+      "ruff",
+      "shellcheck (CI)",
+      "mcp>=1.0 (optional)",
+      "anthropic>=0.40 (optional)",
+      "voyageai>=0.2 (optional)",
+      "sqlite-vec>=0.1.6 (optional)"
+    ],
+    "build_tools": ["make (Makefile)", "setuptools"],
+    "evidence": [
+      {"file": "Makefile",                      "found": ["make", "pytest", "ruff", "shellcheck"]},
+      {"file": "ruff.toml",                     "found": ["ruff", "python3.11+"]},
+      {"file": "memory/pyproject.toml",         "found": ["setuptools", "ucw-memory", "sqlite-vec", "mcp"]},
+      {"file": ".github/workflows/ci.yml",      "found": ["github-actions", "pytest", "ruff", "shellcheck"]},
+      {"file": "bin/ucw-*.py",                  "found": ["python3"]},
+      {"file": "tests/",                        "found": ["pytest"]},
+      {"file": "hooks/",                        "found": ["python3"]},
+      {"file": "agents/",                       "found": ["markdown"]},
+      {"file": "skills/",                       "found": ["markdown"]}
+    ]
+  },
+  "preferences": {
+    "image_gen_tool": "none",
+    "video_gen_tool": "none",
+    "svg_tool": "none",
+    "audio_tool": "none",
+    "diagram_tool": "Mermaid",
+    "deploy_target": "none",
+    "database": "none",
+    "package_manager": "pip",
+    "docs_surface": "plain",
+    "runtime": "python3",
+    "linter": "ruff",
+    "formatter": "ruff",
+    "test_runner": "pytest",
+    "typechecker": "none",
+    "browser_automation": "none",
+    "embedding_provider": "none",
+    "scribe_mode": "auto",
+    "notification_channel": "none"
+  },
+  "init_at": "2026-06-12"
+}

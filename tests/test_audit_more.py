@@ -42,20 +42,54 @@ def test_mcp_shell_exec_detected(tmp_path):
     assert any(f.rule == "mcp_shell_exec" for f in findings)
 
 
-def test_suppression_comment_skips_secret(tmp_path):
+def test_suppression_comment_downgrades_secret_to_nit(tmp_path):
     audit = _load()
+    # github_token has a distinct pattern (no overlap with other secret rules).
     p = tmp_path / "doc.md"
-    p.write_text("Example anthropic key: sk-ant-AbCdEf012345_6789xyzABCDEF <!-- audit-allow: anthropic_key -->\n")
+    p.write_text("token = ghp_" + "A" * 36 + "  # audit-allow: github_token\n")
     findings = audit.scan_secrets(p)
-    assert findings == []
+    # Suppressed findings are downgraded to a visible nit, not silently dropped.
+    assert [f.severity for f in findings] == ["nit"]
+    assert findings[0].rule == "github_token"
 
 
-def test_suppression_comment_skips_injection(tmp_path):
+def test_suppression_comment_downgrades_injection_to_nit(tmp_path):
     audit = _load()
     p = tmp_path / "ex.sh"
     p.write_text("bash -c $USER # audit-allow: bash_c_var\n")
     findings = audit.scan_injection(p)
-    assert findings == []
+    assert [f.severity for f in findings] == ["nit"]
+    assert findings[0].rule == "bash_c_var"
+
+
+def test_suppression_requires_matching_rule(tmp_path):
+    audit = _load()
+    # Token names a *different* rule — must NOT silence the real secret.
+    p = tmp_path / "doc.md"
+    p.write_text("token = ghp_" + "C" * 36 + "  # audit-allow: bash_c_var\n")
+    findings = audit.scan_secrets(p)
+    assert any(f.severity == "critical" and f.rule == "github_token" for f in findings)
+    assert all(f.severity != "nit" for f in findings)
+
+
+def test_suppression_wildcard_token(tmp_path):
+    audit = _load()
+    p = tmp_path / "ex.sh"
+    p.write_text("bash -c $USER # audit-allow: *\n")
+    findings = audit.scan_injection(p)
+    assert [f.severity for f in findings] == ["nit"]
+
+
+def test_suppression_ignored_on_target_paths(tmp_path):
+    audit = _load()
+    # A file reached via --target is untrusted: its audit-allow must NOT suppress.
+    p = tmp_path / "planted.sh"
+    p.write_text("bash -c $USER # audit-allow: bash_c_var\n")
+    findings = audit.scan_injection(p, allow_suppress=False)
+    assert any(f.severity == "major" and f.rule == "bash_c_var" for f in findings)
+    # And end-to-end through main(): --target file keeps its major → exit 3.
+    rc = audit.main(["--repo", str(tmp_path), "--target", str(p), "--json"])
+    assert rc == 3
 
 
 def test_exit_2_on_critical(tmp_path):

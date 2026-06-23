@@ -123,6 +123,88 @@ def test_stop_blocks_on_lint_failure_even_when_tests_pass(project):
     assert (project / ".ucw" / "state" / "phase").read_text().strip() == "build"
 
 
+# ---- stop: no-progress circuit breaker --------------------------------------
+# A failure the diff can't fix (pre-existing lint, tool mismatch, untouched
+# file) would otherwise trap the agent forever — it can't Stop, and every fix
+# attempt re-arms the streak. After UCW_VERIFY_BREAK_AFTER identical failures,
+# the breaker releases the Stop block and records the failure for the human.
+
+def _stop_with_env(project, env_extra: dict) -> tuple[int, str, str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{REPO_ROOT}:{REPO_ROOT}/memory"
+    env.update(env_extra)
+    cp = subprocess.run(
+        [sys.executable, str(HOOKS / "stop.py")],
+        input=json.dumps({"cwd": str(project)}),
+        capture_output=True, text=True, env=env, timeout=20,
+    )
+    return cp.returncode, cp.stdout, cp.stderr
+
+
+def test_stop_circuit_breaker_releases_after_identical_failures(project):
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'E501 line too long' >&2 && false\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    payload = {"cwd": str(project)}
+
+    # Default threshold is 3: first two identical failures still block.
+    for _ in range(2):
+        _rc, out, _ = _run("stop.py", payload)
+        assert json.loads(out)["decision"] == "block"
+        assert (project / ".ucw" / "state" / "edit-streak").read_text().strip() == "3"
+
+    # Third identical failure → breaker releases: allow Stop (no block),
+    # streak cleared, stuck failure recorded for the human.
+    _rc, out, _ = _run("stop.py", payload)
+    assert out == "", f"breaker should allow Stop silently, got: {out!r}"
+    stuck = project / ".ucw" / "state" / "stuck-verify.md"
+    assert stuck.exists()
+    assert "E501 line too long" in stuck.read_text()
+    assert not (project / ".ucw" / "state" / "edit-streak").exists(), \
+        "streak must be cleared on release so the agent isn't immediately re-gated"
+
+
+def test_stop_circuit_breaker_resets_on_changed_failure(project):
+    """Alternating (changing) failures never count as 'no progress', so the
+    breaker must not release — the agent is still moving."""
+    mk = project / "Makefile"
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    payload = {"cwd": str(project)}
+    for msg in ["alpha problem", "beta problem", "alpha problem", "beta problem"]:
+        mk.write_text(f"lint:\n\t@echo '{msg}' >&2 && false\n")
+        _rc, out, _ = _run("stop.py", payload)
+        assert json.loads(out)["decision"] == "block", f"{msg!r} should still block"
+    assert not (project / ".ucw" / "state" / "stuck-verify.md").exists()
+
+
+def test_stop_circuit_breaker_threshold_env(project):
+    """UCW_VERIFY_BREAK_AFTER=1 releases on the very first failure."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'unfixable' >&2 && false\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _stop_with_env(project, {"UCW_VERIFY_BREAK_AFTER": "1"})
+    assert out == "", "break-after=1 must release on the first failure"
+    assert (project / ".ucw" / "state" / "stuck-verify.md").exists()
+
+
+def test_stop_block_reason_advertises_escape_hatch(project):
+    """Every block reason must name a way out (the auto-release or an env
+    escape) so the agent and human aren't left guessing."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'some lint error' >&2 && false\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    reason = json.loads(out)["reason"]
+    assert "auto-releases" in reason or "UCW_SKIP_AUTO_VERIFY" in reason
+
+
 def test_stop_blocks_on_typecheck_failure_even_when_tests_pass(project):
     (project / "Makefile").write_text(
         "typecheck:\n\t@echo 'TS2322' >&2 && false\n"
@@ -447,3 +529,33 @@ def test_post_tool_use_rejects_relative_escape(project):
     assert out == ""
     streak_file = project / ".ucw" / "state" / "edit-streak"
     assert not streak_file.exists() or streak_file.read_text().strip() == "0"
+
+
+# ---- stop: missing tooling is skipped, not blocked --------------------------
+
+def test_stop_missing_tooling_does_not_block(project):
+    """A gate failing because its tooling isn't installed (eslint not found)
+    must not block Stop — there are no lint errors to fix."""
+    (project / "Makefile").write_text(
+        "lint:\n\t@echo 'sh: 1: eslint: not found' >&2; exit 1\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _run("stop.py", {"cwd": str(project)})
+    assert out == "", f"missing tooling must allow Stop, got: {out!r}"
+    # streak cleared, phase advanced — the agent moves on
+    assert not (project / ".ucw" / "state" / "edit-streak").exists()
+
+
+def test_stop_missing_tooling_auto_installs_at_level_2(project):
+    """At auto-level >= 2 the Stop hook passes --auto-install, so verify runs
+    the install command and retries the gate instead of skipping."""
+    (project / "Makefile").write_text(
+        "install:\n\t@touch .deps-installed\n"
+        "lint:\n\t@test -f .deps-installed || (echo 'sh: 1: eslint: not found' >&2; exit 1)\n"
+    )
+    (project / ".ucw" / "state" / "phase").write_text("build")
+    (project / ".ucw" / "state" / "edit-streak").write_text("3")
+    _rc, out, _ = _stop_with_env(project, {"UCW_AUTO_MODE": "2"})
+    assert (project / ".deps-installed").exists(), "auto-install should have run"
+    assert out == "", f"install+retry then pass should allow Stop, got: {out!r}"
