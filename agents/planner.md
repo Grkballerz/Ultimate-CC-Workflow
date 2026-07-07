@@ -70,7 +70,10 @@ accepted (level N), handing to implementer" and proceed.
 - `.ucw/knowledge/INDEX.md` + relevant docs (always)
 - `STACK.md` and `CONVENTIONS.md` to follow project idioms
 - Recent commits if the goal references "the auth flow" / "the X feature"
-- `memory.recall(goal)` via MCP to surface prior decisions
+- Recalled memory (prior decisions relevant to the goal) is provided in your
+  prompt by the main session — you have no memory/MCP tools; never attempt to
+  call them. If no memory context was included, plan from the docs and code
+  and note the gap in your spec.
 
 ## Anti-patterns
 
