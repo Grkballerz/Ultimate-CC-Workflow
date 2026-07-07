@@ -56,7 +56,13 @@ Invoke the **onboarder** subagent. It:
 2. Asks the user the preference questions documented in `agents/onboarder.md`.
 3. Writes `.ucw/state/init.json`.
 4. Calls `$HOME/.claude/ucw/bin/ucw-render-knowledge.py --state .ucw/state/init.json --project-root .` to produce all 7 Knowledge docs.
-5. Initializes `.ucw/memory.sqlite` via `mcp__ucw-memory__memory.init`.
+5. Initializes `.ucw/memory.sqlite` via the CLI: `"$HOME/.claude/ucw/venv/bin/ucw-memory" init`
+   (subagents have no MCP tools, so the onboarder must NOT be asked to call
+   `mcp__ucw-memory__*` — that tool is only reachable from this main session).
+
+After the onboarder returns: if `.ucw/memory.sqlite` does not exist (CLI was
+missing or the step was skipped), call `mcp__ucw-memory__memory.init` yourself
+from this session to complete it.
 
 ---
 
@@ -73,15 +79,19 @@ Goal: the rest of $ARGUMENTS after `plan`.
 
 1. Check auto-mode: `AUTO_LEVEL=$($HOME/.claude/ucw/bin/ucw-auto.py level)`
 2. Set phase: `$HOME/.claude/ucw/bin/ucw-phase.py set scope`
-3. Invoke the **planner** subagent for the Scope phase.
+3. Prime memory: call `mcp__ucw-memory__memory.recall` with `query` = the goal
+   (`k=8`, `budget_chars=3000`, `scope=all`) and include the hits in the
+   planner's prompt. Subagents have no MCP tools — the planner cannot recall
+   memory itself, so this step is how prior decisions reach the plan.
+4. Invoke the **planner** subagent for the Scope phase.
    - If `AUTO_LEVEL >= 1`: planner auto-accepts its own spec and proceeds
      immediately to the Plan phase. Print the spec for transparency but do
      NOT pause for AskUserQuestion.
    - Otherwise: wait for explicit user approval before proceeding.
-4. `$HOME/.claude/ucw/bin/ucw-phase.py set plan` and planner runs the Plan phase.
+5. `$HOME/.claude/ucw/bin/ucw-phase.py set plan` and planner runs the Plan phase.
    - If `AUTO_LEVEL >= 1`: same — auto-accept the plan, print it, advance.
    - Otherwise: wait for approval.
-5. `$HOME/.claude/ucw/bin/ucw-phase.py set build` and write the final task list to `.ucw/state/plan.md`.
+6. `$HOME/.claude/ucw/bin/ucw-phase.py set build` and write the final task list to `.ucw/state/plan.md`.
 
 In normal mode (`AUTO_LEVEL == 0`) do not proceed to Build until both Scope
 and Plan are user-approved. Auto-mode level 1+ removes both gates so the

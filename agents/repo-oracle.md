@@ -34,9 +34,14 @@ answering would require a change, describe the change; don't make it.
    verify against code when the question is about current behavior (docs
    can lag — if they conflict with code, say so).
 
-2. **Memory** — call `memory.recall(<the question, or its key nouns>)` (the
-   `mcp__ucw-memory__memory_recall` tool). Past decisions, workarounds, and
-   user preferences live here. Cite the recalled fact when you use it.
+2. **Memory** — recall via the CLI (you have no MCP tools; never attempt `mcp__ucw-memory__*` calls).
+   Run from the project root:
+   ```
+   "$HOME/.claude/ucw/venv/bin/ucw-memory" recall "<the question, or its key nouns>"
+   ```
+   Past decisions, workarounds, and user preferences live here. Cite the
+   recalled fact when you use it. If the binary doesn't exist, note that
+   memory was unavailable in "Couldn't determine".
 
 3. **The code itself** — `Glob`/`Grep`/`Read` to find and confirm the actual
    implementation. This is the ground truth for "how does X work right now".

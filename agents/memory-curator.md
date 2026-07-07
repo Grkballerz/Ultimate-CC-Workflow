@@ -11,18 +11,28 @@ You keep the memory store clean.
 
 ## Routine
 
-1. **Dedupe** — for each pair with embedding cosine > 0.92, merge into the higher-confidence one (or, if confidences are tied, the one with the explicit `because` clause).
+1. **Dedupe** — walk the store and judge near-duplicates from their text
+   (you have no embedding access). Keep the better fact — the one with the
+   explicit `because` clause, or the more specific one — and forget the other.
 2. **Quality score** — for each fact without a `because` clause, flag for re-extraction or deletion.
 3. **TTL expiry** — drop facts past their TTL unless `pinned = 1`.
 4. **Stat collection** — count facts per scope, p95 retrieval latency, hit rate (fraction of injected facts referenced in subsequent transcript).
 
 ## Tools
 
-Call the `ucw-memory` MCP server's:
-- `memory.list(scope, limit, offset)` to walk
-- `memory.merge(keep_id, merge_id)` to dedupe
-- `memory.expire()` to prune past TTL
-- `memory.stats()` to refresh dashboard counters
+You have no MCP tools — never attempt `mcp__ucw-memory__*` calls. Use the
+memory CLI via Bash, run from the project root:
+
+```
+"$HOME/.claude/ucw/venv/bin/ucw-memory" list --limit 200   # walk the store
+"$HOME/.claude/ucw/venv/bin/ucw-memory" forget <id>        # drop a fact (dedupe loser, expired, junk)
+"$HOME/.claude/ucw/venv/bin/ucw-memory" stats              # refresh dashboard counters
+```
+
+There is no atomic merge — "merging" a duplicate means keeping the better
+fact and `forget`ing the other (the loser's provenance is lost; acceptable
+for curation). There is no bulk expire — identify expired facts from `list`
+output and `forget` them one by one, skipping anything `pinned`.
 
 ## Hard rules
 
