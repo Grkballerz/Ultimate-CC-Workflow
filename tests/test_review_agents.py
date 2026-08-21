@@ -214,3 +214,56 @@ def test_onboarder_inits_memory_via_cli():
 def test_repo_oracle_recalls_memory_via_cli():
     body = (AGENTS_DIR / "repo-oracle.md").read_text(encoding="utf-8")
     assert "ucw-memory" in body and "recall" in body
+
+
+# ---- Kimi cross-model lanes are documented as OPT-IN -------------------------
+# The Kimi second-opinion review lane and the Kimi disprover route both cost
+# separate tokens and add latency — they must be documented as opt-in flags,
+# and the stock disprover subagent must stay on haiku (cross-audit invariant).
+
+def _ucw_md() -> str:
+    return (REPO_ROOT / "commands" / "ucw.md").read_text(encoding="utf-8")
+
+
+def test_review_documents_with_kimi_lane_as_opt_in():
+    """--with-kimi adds the kimi-second-opinion lane, and it's opt-in."""
+    text = _ucw_md()
+    assert "--with-kimi" in text, \
+        "commands/ucw.md must document the --with-kimi review flag"
+    assert "kimi-second-opinion" in text, \
+        "commands/ucw.md must name the kimi-second-opinion lane"
+    assert "ucw-kimi-opinion.py" in text, \
+        "commands/ucw.md must reference bin/ucw-kimi-opinion.py"
+    assert re.search(r"opt-in|default off|default: off", text, re.IGNORECASE), \
+        "the Kimi review lane must be documented as opt-in / default off"
+
+
+def test_review_documents_with_kimi_settings_fallback():
+    """Absent the flag, kimi.review from ucw-settings decides."""
+    text = _ucw_md()
+    assert "kimi.review" in text
+
+
+def test_review_documents_disprover_model_kimi_as_opt_in():
+    """--disprover-model kimi routes disprove through the bridge; haiku default."""
+    text = _ucw_md()
+    assert "--disprover-model" in text, \
+        "commands/ucw.md must document the --disprover-model review flag"
+    assert "ucw-kimi-disprove.py" in text, \
+        "commands/ucw.md must reference bin/ucw-kimi-disprove.py"
+    assert "kimi.disprover" in text, \
+        "absent the flag, kimi.disprover from ucw-settings decides"
+    # The default stays the haiku disprover subagent, stated near the flag
+    # documentation (rindex: the first occurrence is the section heading).
+    flag_idx = text.rindex("--disprover-model")
+    window = text[flag_idx:flag_idx + 1500]
+    assert "haiku" in window and "default" in window.lower(), \
+        "the haiku disprover subagent must be documented as the default route"
+
+
+def test_disprover_frontmatter_model_is_still_haiku():
+    """The Kimi disprover ROUTE must not change the stock agent's model."""
+    meta = _parse_frontmatter(AGENTS_DIR / "disprover.md")
+    assert meta.get("model") == "haiku", \
+        "agents/disprover.md must keep model: haiku — the Kimi route is a " \
+        "separate opt-in path, not a change to the subagent"

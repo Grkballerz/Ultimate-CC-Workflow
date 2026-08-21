@@ -5,6 +5,68 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Added — Kimi K3 cross-model integration (opt-in, advisory-first)
+
+UCW can now pull a second model into the loop through the `claude-kimi`
+bridge (`claude-kimi -p "<prompt>"` runs Claude Code headlessly against
+Kimi K3). All plumbing goes through `bin/kimi_invoke.py` — subprocess
+timeout, bounded retries, lenient JSON extraction, and a never-raise
+contract (every failure comes back as `ok=False`). It also has a
+`--raw` prose mode (any non-empty stdout is success — no JSON
+extraction, no retry burn; the right mode for reviews, summaries, and
+opinions) and accepts `-` as the prompt to read it from stdin (so
+`git diff | kimi_invoke.py - --raw` just works). Timeout and model
+resolve from `UCW_KIMI_TIMEOUT_SECS` / `UCW_KIMI_MODEL` env, then the
+project's `kimi.timeout_secs` / `kimi.model` settings, then 300s /
+`kimi-k3`; the resolved model is exported to the subprocess as
+`KIMI_MODEL`. Auth stays the bridge's problem; no secrets or endpoints
+live in UCW.
+
+Four surfaces, every one of them off by default:
+
+- **`/ucw review --with-kimi`** — adds a `kimi-second-opinion` lane
+  (`bin/ucw-kimi-opinion.py`): one whole-diff pass run in PARALLEL with
+  the 9 reviewer subagents as a 10th fan-out lane. Its findings persist
+  via the same `add-finding` path and flow through the normal
+  disprove → dedup → gate stages — no special treatment.
+- **`/ucw review --disprover-model kimi`** — routes the disprove step
+  through `bin/ucw-kimi-disprove.py` so Kimi K3 is the opposing model in
+  the cross-audit. The Kimi disprover is read-only (`Read,Grep,Glob` —
+  no shell): disproving is reading code, not running it. Default
+  unchanged: the haiku **disprover** subagent.
+- **`/ucw opinion <question | --diff>`** — ad-hoc second opinion,
+  printed VERBATIM under a `## Kimi (advisory, unverified)` banner.
+  Advisory only; never merged into the agent's own voice.
+- **`[kimi]` implementer offload** — the planner may tag bounded,
+  mechanical tasks (boilerplate, docs stubs, test scaffolding — never
+  auth/security/core-logic) for offload via `bin/ucw-kimi-implement.py`
+  (file edits only, no shell). The tag is inert unless the
+  `kimi.offload` setting resolves true, and the resulting diff must pass
+  the implementer's own verification plus the normal verifier + reviewer
+  gates — the same bar as a Claude-authored diff.
+
+New **`/ucw settings`** command (`bin/ucw-settings.py`): per-project
+behavior toggles stored at `.ucw/state/settings.json`. Typed, closed key
+registry (`kimi.review`, `kimi.disprover`, `kimi.offload`, `kimi.model`,
+`kimi.timeout_secs`, `review.default`, `ship.push`, `ship.pr`,
+`scribe.auto`) — settings never store secrets. All nine keys are
+consulted by a named consumer wired in `commands/ucw.md` — none is
+inert. Resolution precedence: env var (`UCW_KIMI_OFFLOAD`-style) >
+project settings file > registry default. Verbs: `list` / `get` /
+`set` / `unset`.
+
+Invariant, stated once and enforced everywhere: **Kimi output is never
+load-bearing without passing the existing disprove/dedup/gate or
+verifier/reviewer machinery, and never runs unattended unless a `kimi.*`
+setting explicitly enables it.**
+
+Tests (all mock `subprocess` — zero network, never invoke the real
+bridge): `test_kimi_invoke.py`, `test_kimi_review_lane.py`,
+`test_kimi_disprove.py`, `test_opinion_command.py`,
+`test_kimi_implementer_offload.py`, `test_settings_cli.py`,
+`test_settings_command.py`, plus extended `test_review_agents.py`
+doc-wiring assertions.
+
 ### Fixed — MCP server registered where Claude Code never read it
 
 `install.sh`'s `register_mcp()` wrote the `ucw-memory` server into

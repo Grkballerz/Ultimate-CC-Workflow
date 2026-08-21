@@ -1,6 +1,6 @@
 ---
 description: UCW root command. All UCW workflows live under here as subcommands to avoid colliding with Claude Code built-ins (/plan, /init, /review are reserved).
-argument-hint: "<subcommand> [args]   |   status | init | plan | ship | review | audit | ask | recall | pin | scribe | distill | dashboard | watch | unwatch | worktree | phase | prefs | auto | help"
+argument-hint: "<subcommand> [args]   |   status | init | plan | ship | review | audit | ask | opinion | recall | pin | scribe | distill | dashboard | watch | unwatch | worktree | phase | prefs | auto | settings | help"
 ---
 
 Arguments: $ARGUMENTS
@@ -22,6 +22,7 @@ ucw <sub> [args...]
   review [flags]      cross-audit code review (narrow scope + disprover + reachability)
   audit               deterministic security scan + adversarial reviewer
   ask <question>      repo-oracle subagent — answer questions about this repo
+  opinion <q | --diff> ad-hoc Kimi second opinion (advisory, unverified, read-only)
   recall <query>      memory.recall via the MCP server
   pin <fact>          memory.pin
   scribe              refresh .ucw/knowledge/* from the latest diff
@@ -32,6 +33,7 @@ ucw <sub> [args...]
   worktree <subcmd>   create | list | cleanup | remove (multi-agent fan-out)
   phase <subcmd>      get | set <name> | clear
   auto <subcmd>       on [level] | off | status — autonomous run mode
+  settings <subcmd>   list | get <key> | set <key> <value> | unset <key>
   resume              print resume block after /clear or /compact
 ```
 
@@ -97,6 +99,26 @@ In normal mode (`AUTO_LEVEL == 0`) do not proceed to Build until both Scope
 and Plan are user-approved. Auto-mode level 1+ removes both gates so the
 agent can run end-to-end through Build unattended.
 
+### The `[kimi]` task tag
+
+The planner MAY tag an individual plan task `[kimi]` to mark it as a
+candidate for offload to Kimi K3 — but ONLY when the task is bounded and
+mechanical: boilerplate, docs stubs, test scaffolding, and similar. NEVER
+tag auth, security, or core-logic tasks `[kimi]`.
+
+`[kimi]` tags are honored ONLY when `ucw-settings.py get kimi.offload`
+resolves true (default: false). When it is false, the implementer treats
+the task as a normal Claude task and the tag is inert — this is the
+kill-switch that keeps unattended `/ucw auto` runs from spending Kimi
+tokens.
+
+When honored, the implementer routes the task to
+`$HOME/.claude/ucw/bin/ucw-kimi-implement.py` (file edits only — Kimi
+gets no shell), then MUST run its own verification. The Kimi diff is
+unverified until the normal verifier + reviewer gates pass — the exact
+same bar as a Claude-authored diff. Tick the task in `.ucw/state/plan.md`
+only after that verification passes.
+
 ---
 
 ## ship [--no-push | --pr | --base <branch>]
@@ -111,8 +133,10 @@ agent can run end-to-end through Build unattended.
    - **At AUTO_LEVEL >= 3**: skip confirmation — proceed directly to commit.
    - `git add -A` (or specific files from `.ucw/state/plan.md`)
    - `git commit` with a message derived from the plan + key tasks
-   - Unless `--no-push`: `git push -u origin HEAD`
-6. If `--pr` OR `AUTO_LEVEL >= 4`:
+   - Unless `--no-push`: consult `ucw-settings.py get ship.push` — if it
+     resolves false, behave exactly as if `--no-push` had been passed;
+     otherwise (true, the default) `git push -u origin HEAD`
+6. If `--pr` OR `ucw-settings.py get ship.pr` resolves true OR `AUTO_LEVEL >= 4`:
    a. Generate PR metadata: `META=$($HOME/.claude/ucw/bin/ucw-pr-meta.py --base ${ARG_BASE:-main})`
       - Exit 0 → use the JSON.
       - Exit 2 → no commits ahead of base, skip the PR step entirely (log it for the user).
@@ -124,29 +148,61 @@ agent can run end-to-end through Build unattended.
       so CI failures and review comments wake this session for autopilot fixes. Same
       contract as `/ucw watch <PR>` — fix bounded issues automatically, AskUserQuestion
       on ambiguous comments.
-7. Invoke the **scribe** subagent on the just-made diff.
+7. Consult `ucw-settings.py get scribe.auto` — when true (the default),
+   invoke the **scribe** subagent on the just-made diff; when false, skip
+   this step (the user runs `/ucw scribe` manually later).
 8. `$HOME/.claude/ucw/bin/ucw-phase.py clear`
 9. Print the commit SHA, the PR URL (if opened), and Knowledge files that changed.
 
 ---
 
-## review [--full | --quick | --narrow <area> | --since <ref> | approve <id> | status | list]
+## review [--full | --quick | --narrow <area> | --since <ref> | --with-kimi | --disprover-model <haiku|kimi> | approve <id> | status | list]
 
-Cross-audit review pipeline. **Empty args OR `--full` → run the full pipeline:**
+Cross-audit review pipeline. **Empty args OR `--full` → run the full pipeline**
+— except that with empty args (no `--full`/`--quick` given), first consult
+`ucw-settings.py get review.default`: `full` (the default) runs the full
+pipeline below; `quick` behaves exactly as if `--quick` had been passed.
+An explicit flag always wins over the setting. Full pipeline:
 
 1. `$HOME/.claude/ucw/bin/ucw-review.py scope --persist [--since $SINCE]`
 2. Fan out to 9 narrow reviewer subagents (`reviewer-correctness`, `reviewer-injection`,
    `reviewer-deserialization`, `reviewer-auth`, `reviewer-performance`,
    `reviewer-data-loss`, `reviewer-api-compat`, `reviewer-tests`, `reviewer-docs`).
    Each invokes `ucw-review.py add-finding ...` to persist findings.
+   If the Kimi lane is enabled (see `--with-kimi` below), launch
+   `$HOME/.claude/ucw/bin/ucw-kimi-opinion.py [--since $SINCE]` as a 10th
+   PARALLEL fan-out lane alongside these 9 — not serially after them.
 3. For each finding: spawn the **disprover** subagent (model: haiku — different from
    reviewers, that's the cross-audit invariant). Disprover cannot generate new
    findings. It calls `ucw-review.py disprove <id> <verdict> ...`.
+   If the disprove step is routed to Kimi (see `--disprover-model` below),
+   run `$HOME/.claude/ucw/bin/ucw-kimi-disprove.py <id>` per finding instead.
 4. For each security finding (injection / deserialization / auth):
    spawn the **reachability** subagent. Calls `ucw-review.py reachability <id> <verdict> ...`.
 5. `$HOME/.claude/ucw/bin/ucw-review.py dedup`
 6. `$HOME/.claude/ucw/bin/ucw-review.py gate` — exits 2 on unack'd effective-critical
 7. `$HOME/.claude/ucw/bin/ucw-review.py summary --format markdown` for the user
+
+Optional flags (both opt-in, both default off):
+
+- `--with-kimi` — adds the `kimi-second-opinion` lane: one whole-diff pass
+  through the claude-kimi bridge (`bin/ucw-kimi-opinion.py`), run in
+  PARALLEL with the 9 reviewer subagents as a 10th fan-out lane. Its
+  findings are persisted via the same `add-finding` path and flow through
+  the normal disprove → dedup → gate stages — no special treatment.
+  Expect ~30-90s of extra wall-clock latency typically (the invocation
+  timeout defaults to 300s, tunable via the `kimi.timeout_secs` setting)
+  and note that Kimi tokens bill separately from Claude. When the flag
+  is absent, consult
+  `ucw-settings.py get kimi.review` — if it resolves true, run the lane
+  exactly as if `--with-kimi` had been passed.
+- `--disprover-model kimi` — routes the disprove step (step 3) through
+  `bin/ucw-kimi-disprove.py` so Kimi K3 is the opposing model. The
+  default is unchanged: the haiku **disprover** subagent. When the flag
+  is absent, consult `ucw-settings.py get kimi.disprover` — `haiku`
+  (default) keeps the subagent; `kimi` routes through the bridge.
+  The Kimi disprover runs with read-only tools (`Read,Grep,Glob` —
+  no Bash): disproving is reading code, not running it.
 
 Other subcommands:
 - `--quick` — single reviewer pass + deterministic audit, no cross-audit
@@ -192,6 +248,43 @@ knowledge). The question is the rest of $ARGUMENTS after the `ask` token.
 This is a read-only query path — it never enters a workflow phase, never
 edits, and never touches `.ucw/state`. If the oracle reports a Knowledge doc
 is stale (docs disagree with code), suggest `/ucw scribe` to the user.
+
+---
+
+## opinion <question | --diff>
+
+Ad-hoc second opinion from Kimi K3 — a cross-model sanity check on a
+question or on the working diff. The question is the rest of $ARGUMENTS
+after the `opinion` token; `--diff` sends `git diff` output instead.
+
+1. Invoke the bridge. The PRIMARY path is a free-form prose answer:
+   `claude-kimi -p "<question>"` directly, or equivalently
+   `$HOME/.claude/ucw/bin/kimi_invoke.py "<question>" --raw`
+   (`--raw` skips JSON extraction — any non-empty stdout is success).
+   Prose answers are the normal case for an opinion; drop `--raw` only
+   when you need a structured JSON payload extracted from the output.
+
+   For `--diff`, pipe the diff in as the prompt via the stdin marker `-`:
+
+   ```
+   git diff | $HOME/.claude/ucw/bin/kimi_invoke.py - --raw
+   ```
+
+   Typical latency is ~30-90s; the invocation timeout defaults to 300s,
+   tunable via the `kimi.timeout_secs` setting (or `UCW_KIMI_TIMEOUT_SECS`).
+2. Print the answer VERBATIM under an explicit banner:
+
+   ```
+   ## Kimi (advisory, unverified)
+   <answer exactly as returned>
+   ```
+
+The answer is advisory only — cross-model input, not a verdict. Do not
+merge it into your own voice, do not act on it without normal verification,
+and label it clearly so the user knows which model said what.
+
+Like `ask`, this is a read-only query path — it never enters a workflow
+phase, never edits, and never touches `.ucw/state`.
 
 ---
 
@@ -302,6 +395,45 @@ goes wrong and you need to stop it now without finding the right file.
 
 After enabling, print the level + a one-line warning about what's being
 delegated. After disabling, print confirmation.
+
+---
+
+## settings [list | get <key> | set <key> <value> | unset <key>]
+
+Forward to `$HOME/.claude/ucw/bin/ucw-settings.py <subcmd> [args]`.
+
+Verbs: `list` (every key with effective value + source), `get <key>`,
+`set <key> <value>`, `unset <key>` (revert to default).
+
+Per-project behavior toggles stored at `.ucw/state/settings.json`. The key
+registry is a closed set — settings never store secrets or credentials
+(secrets belong in env vars managed outside UCW).
+
+Key registry:
+
+| key | type | default | effect |
+|-----|------|---------|--------|
+| `kimi.review` | bool | `false` | treat `--with-kimi` as default on `/ucw review` (consulted by the review dispatch when the flag is absent) |
+| `kimi.disprover` | enum (`haiku` \| `kimi`) | `haiku` | disprover route (consulted by `/ucw review` step 3 when `--disprover-model` is absent; default `haiku` keeps the subagent, `kimi` routes via the bridge) |
+| `kimi.offload` | bool | `false` | honor `[kimi]` plan-task tags (consulted by the implementer) — kill-switch that keeps unattended auto-mode runs from spending Kimi tokens |
+| `kimi.model` | str | `kimi-k3` | model id passed to the claude-kimi bridge (consulted by `kimi_invoke` when `--model` is absent; exported to the subprocess as `KIMI_MODEL`) |
+| `kimi.timeout_secs` | int | `300` | per-invocation timeout in seconds for any headless Kimi call (consulted by `kimi_invoke` when `--timeout` is absent) |
+| `review.default` | enum (`full` \| `quick`) | `full` | default review depth (consulted by the `/ucw review` dispatch when `--full`/`--quick` are absent) |
+| `ship.push` | bool | `true` | push the branch after commit (consulted by the `/ucw ship` land step when `--no-push` is absent) |
+| `ship.pr` | bool | `false` | open a draft PR after push (consulted by the `/ucw ship` PR step when `--pr` is absent) |
+| `scribe.auto` | bool | `true` | run the scribe automatically after Land (consulted by the `/ucw ship` scribe step) |
+
+Every key above is consulted by its named consumer — none is inert.
+
+Resolution order for reads (first hit wins):
+
+1. `UCW_<KEY>` env var — dots become underscores, uppercased
+   (e.g. `kimi.offload` → `UCW_KIMI_OFFLOAD`)
+2. `.ucw/state/settings.json` project override
+3. registry default
+
+An env var that fails validation for its key's type is ignored and
+resolution falls through. Unknown keys are rejected (exit 2).
 
 ---
 
