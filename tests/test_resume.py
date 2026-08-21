@@ -90,13 +90,13 @@ def test_resume_prints_phase_when_set(state_only_project):
 
 def test_resume_includes_edit_streak_when_nonzero(state_only_project):
     (state_only_project / ".ucw" / "state" / "edit-streak").write_text("4")
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "Edit streak" in out
     assert "4" in out
 
 
 def test_resume_omits_edit_streak_when_zero(state_only_project):
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "Edit streak" not in out
 
 
@@ -106,14 +106,14 @@ def test_resume_includes_auto_mode_level_when_on(state_only_project):
     (state_only_project / ".ucw" / "state" / "auto-mode").write_text(
         json.dumps({"level": 3, "since": "2026-06-01T10:00:00Z"})
     )
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "Auto-mode" in out
     assert "level 3" in out
     assert "since 2026-06-01T10:00:00Z" in out
 
 
 def test_resume_shows_auto_mode_off_when_no_state(state_only_project):
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "Auto-mode" in out
     assert "off" in out.lower()
 
@@ -123,7 +123,7 @@ def test_resume_includes_retry_budget_at_level_2_plus(state_only_project):
         json.dumps({"level": 2, "since": "2026-06-01T10:00:00Z"})
     )
     (state_only_project / ".ucw" / "state" / "auto-retries").write_text("1")
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "retries 1/3" in out
 
 
@@ -131,7 +131,7 @@ def test_resume_respects_env_auto_mode_override(state_only_project):
     (state_only_project / ".ucw" / "state" / "auto-mode").write_text(
         json.dumps({"level": 4})
     )
-    rc, out, _ = _run([], cwd=state_only_project,
+    _rc, out, _ = _run([], cwd=state_only_project,
                       env_extra={"UCW_AUTO_MODE": "off"})
     # State says L4 but env says off — env wins
     assert "level 4" not in out
@@ -144,7 +144,7 @@ def test_resume_includes_spec_when_present(state_only_project):
     (state_only_project / ".ucw" / "state" / "spec.md").write_text(
         "# Spec: add healthz\n\nLiveness probe for the Flask app.\n"
     )
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "Spec" in out
     assert "Liveness probe" in out
 
@@ -152,7 +152,7 @@ def test_resume_includes_spec_when_present(state_only_project):
 def test_resume_truncates_spec_at_byte_limit(state_only_project):
     long = "x" * 5000
     (state_only_project / ".ucw" / "state" / "spec.md").write_text(long)
-    rc, out, _ = _run(["--spec-bytes", "500"], cwd=state_only_project)
+    _rc, out, _ = _run(["--spec-bytes", "500"], cwd=state_only_project)
     assert "truncated at 500" in out
 
 
@@ -160,7 +160,7 @@ def test_resume_includes_plan_when_present(state_only_project):
     (state_only_project / ".ucw" / "state" / "plan.md").write_text(
         "1. [A] Add /healthz endpoint   src/health.py\n2. [A] Add test   tests/test_health.py\n"
     )
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "Plan" in out
     assert "Add /healthz endpoint" in out
 
@@ -168,27 +168,27 @@ def test_resume_includes_plan_when_present(state_only_project):
 def test_resume_truncates_plan_at_byte_limit(state_only_project):
     long = "x" * 5000
     (state_only_project / ".ucw" / "state" / "plan.md").write_text(long)
-    rc, out, _ = _run(["--plan-bytes", "500"], cwd=state_only_project)
+    _rc, out, _ = _run(["--plan-bytes", "500"], cwd=state_only_project)
     assert "truncated at 500" in out
 
 
 def test_resume_notes_missing_spec_when_phase_is_set(state_only_project):
     """If phase is set but spec.md doesn't exist (legacy state from before
     PR D), surface the gap so the user knows to re-run /ucw plan."""
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "No `.ucw/state/spec.md`" in out or "spec was never persisted" in out
 
 
 # ---- git integration -------------------------------------------------------
 
 def test_resume_includes_last_commit_sha_and_subject(git_project):
-    rc, out, _ = _run([], cwd=git_project)
+    _rc, out, _ = _run([], cwd=git_project)
     assert "HEAD" in out
     assert "Initial commit subject" in out
 
 
 def test_resume_includes_branch_when_not_HEAD(git_project):
-    rc, out, _ = _run([], cwd=git_project)
+    _rc, out, _ = _run([], cwd=git_project)
     assert "main" in out
 
 
@@ -207,7 +207,7 @@ def test_resume_dirty_tree_warning_when_auto_on_and_phase_land(git_project):
     (git_project / ".ucw" / "state" / "auto-mode").write_text(json.dumps({"level": 3}))
     # Make tree dirty
     (git_project / "new.py").write_text("x = 1\n")
-    rc, out, _ = _run([], cwd=git_project)
+    _rc, out, _ = _run([], cwd=git_project)
     assert "Dirty tree" in out
     assert "WARNING" in out
     assert "crashed mid-ship" in out
@@ -216,7 +216,7 @@ def test_resume_dirty_tree_warning_when_auto_on_and_phase_land(git_project):
 def test_resume_dirty_tree_no_warning_when_phase_is_build(git_project):
     (git_project / ".ucw" / "state" / "auto-mode").write_text(json.dumps({"level": 3}))
     (git_project / "new.py").write_text("x = 1\n")
-    rc, out, _ = _run([], cwd=git_project)
+    _rc, out, _ = _run([], cwd=git_project)
     # phase=build, dirty tree is EXPECTED — warning should NOT fire
     assert "WARNING" not in out
     assert "Dirty tree" in out  # but the count is still listed
@@ -226,7 +226,7 @@ def test_resume_dirty_tree_no_warning_when_auto_off(git_project):
     (git_project / ".ucw" / "state" / "phase").write_text("land\n")
     # No auto-mode state → no auto-mode
     (git_project / "new.py").write_text("x = 1\n")
-    rc, out, _ = _run([], cwd=git_project)
+    _rc, out, _ = _run([], cwd=git_project)
     assert "WARNING" not in out
 
 
@@ -236,7 +236,7 @@ def test_resume_includes_pre_compact_digest_when_present(state_only_project):
     (state_only_project / ".ucw" / "state" / "pre-compact-digest.md").write_text(
         "# Pre-compact digest\n\n- Phase at compact: build\n- Trigger: manual\n"
     )
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "Pre-compact digest" in out
     assert "Trigger: manual" in out
 
@@ -247,7 +247,7 @@ def test_resume_lists_knowledge_files(state_only_project):
     (state_only_project / ".ucw" / "knowledge").mkdir()
     (state_only_project / ".ucw" / "knowledge" / "STACK.md").write_text("x")
     (state_only_project / ".ucw" / "knowledge" / "DESIGN.md").write_text("x")
-    rc, out, _ = _run([], cwd=state_only_project)
+    _rc, out, _ = _run([], cwd=state_only_project)
     assert "Knowledge" in out
     assert "STACK.md" in out
     assert "DESIGN.md" in out
