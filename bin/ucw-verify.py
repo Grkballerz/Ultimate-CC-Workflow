@@ -36,6 +36,21 @@ Behavior:
   it the gate is setup-skipped (passed, with a `setup_hint`) so the agent
   isn't told to fix nonexistent lint errors. `setup_skipped`/`setup_hint`
   appear at the top level when this happens.
+- Tool resolution probes project-local installs BEFORE PATH:
+  `<repo>/.venv/bin`, `<repo>/venv/bin`, `<repo>/node_modules/.bin`,
+  `$UCW_HOME/venv/bin` (where install.sh provisions pytest + ruff as a
+  fallback), then `shutil.which` on PATH. The same dirs are prepended to the
+  gate subprocess PATH so indirect invocations (`make lint` → ruff) resolve
+  identically.
+- Strict gates: when the workflow phase is `verify` or `land`, or auto-mode
+  level >= 2, a setup-skip (missing tool) is a gate FAILURE — nobody is left
+  in the loop to notice a silently skipped gate. `--strict` / `--no-strict`
+  (or UCW_VERIFY_STRICT=1/0) override the auto-detection.
+- Reporting + caching: the JSON result is always written to
+  `.ucw/state/verify-report.json`. A tree-keyed cache lives at
+  `.ucw/state/last-verify.json` (key = HEAD sha + sha256 of `git diff HEAD`
+  output); an unchanged tree since the last PASSING run skips the re-run and
+  reports "cached PASS". `--no-cache` forces a fresh run.
 
 Exit codes (CLI):
 - 0 if all (non-skipped) gates pass
@@ -46,6 +61,7 @@ Exit codes (CLI):
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -183,6 +199,100 @@ def _detect_stack(project_root: Path) -> dict[str, Any] | None:
         return data if isinstance(data, dict) else None
     except json.JSONDecodeError:
         return None
+
+
+# ---- tool resolution -------------------------------------------------------
+# Bare `shutil.which` misses project-local installs (a repo venv, node_modules
+# binaries) and the UCW fallback venv that install.sh provisions with pytest +
+# ruff. Probe those first so gates find their tooling even under a minimal
+# hook PATH; PATH stays the last resort.
+
+def _ucw_home() -> Path:
+    env = os.environ.get("UCW_HOME", "").strip()
+    return Path(env) if env else Path.home() / ".claude" / "ucw"
+
+
+def _tool_probe_dirs(project_root: Path) -> list[Path]:
+    """Directories probed (in order) before falling back to PATH."""
+    return [
+        project_root / ".venv" / "bin",
+        project_root / "venv" / "bin",
+        project_root / "node_modules" / ".bin",
+        _ucw_home() / "venv" / "bin",
+    ]
+
+
+def _resolve_tool(project_root: Path, bin_name: str) -> str | None:
+    """Resolve a gate binary: probe dirs first, then PATH. None if absent."""
+    if os.sep in bin_name:
+        cand = (project_root / bin_name).resolve()
+        return str(cand) if cand.is_file() and os.access(cand, os.X_OK) else None
+    for d in _tool_probe_dirs(project_root):
+        cand = d / bin_name
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+    return shutil.which(bin_name)
+
+
+def _gate_env(project_root: Path) -> dict[str, str]:
+    """Subprocess env with existing probe dirs prepended to PATH so tools
+    spawned indirectly (`make lint` → ruff, npx shims) resolve the same way
+    the gate binary itself did."""
+    env = os.environ.copy()
+    prefix = [str(d) for d in _tool_probe_dirs(project_root) if d.is_dir()]
+    if prefix:
+        env["PATH"] = os.pathsep.join([*prefix, env.get("PATH", "")])
+    return env
+
+
+# ---- strict gates ----------------------------------------------------------
+# In Build a missing tool is a transparent setup-skip (there are no errors to
+# fix). At verify/land — or with auto-mode driving (level >= 2) — nobody is
+# left in the loop to notice a silently skipped gate before code ships, so a
+# missing tool becomes a FAILURE with an actionable install hint.
+
+STRICT_PHASES = ("verify", "land")
+
+_VALID_AUTO_LEVELS = (1, 2, 3, 4)
+
+
+def _workflow_phase(project_root: Path) -> str | None:
+    text = _read_text(project_root / ".ucw" / "state" / "phase")
+    return (text or "").strip() or None
+
+
+def _auto_level(project_root: Path) -> int:
+    """Auto-mode level (0 = off): UCW_AUTO_MODE env → .ucw/state/auto-mode → 0.
+
+    Mirrors hooks/_hook_common.auto_mode_level — bin/ CLIs can't import from
+    hooks/ (and hooks stay self-contained); tests guard against drift.
+    """
+    env = os.environ.get("UCW_AUTO_MODE", "").strip().lower()
+    if env in {"0", "off", "no", "false"}:
+        return 0
+    if env.isdigit() and int(env) in _VALID_AUTO_LEVELS:
+        return int(env)
+    if env == "on":
+        return 4
+    data = _load_json(project_root / ".ucw" / "state" / "auto-mode")
+    level = (data or {}).get("level")
+    if isinstance(level, int) and level in _VALID_AUTO_LEVELS:
+        return level
+    return 0
+
+
+def strict_gates(project_root: Path) -> bool:
+    """True when a setup-skip (missing tool) must be a gate FAILURE.
+
+    UCW_VERIFY_STRICT=1/0 forces it either way; otherwise strict when the
+    workflow phase is verify/land or auto-mode level >= 2.
+    """
+    env = os.environ.get("UCW_VERIFY_STRICT", "").strip().lower()
+    if env in {"1", "true", "yes"}:
+        return True
+    if env in {"0", "false", "no"}:
+        return False
+    return _workflow_phase(project_root) in STRICT_PHASES or _auto_level(project_root) >= 2
 
 
 # ---- missing-tooling detection + install ----------------------------------
@@ -345,25 +455,33 @@ def _run_one(
 ) -> dict[str, Any]:
     """Run a single command. Returns the per-gate result dict (no `name` yet)."""
     bin_name = command[0]
-    if not shutil.which(bin_name):
+    resolved = _resolve_tool(project_root, bin_name)
+    if resolved is None:
         return {
             "passed": False,
             "command": " ".join(command),
             "exit_code": None,
             "elapsed_ms": 0,
             "timed_out": False,
-            "summary": f"runner not found on PATH: {bin_name!r}",
+            # The binary is absent everywhere we probed — that's the same
+            # environment problem as a "command not found" in gate output, so
+            # flag it the same way (setup-skip off strict, FAILURE under it).
+            "tooling_missing": True,
+            "summary": (
+                f"runner not found: {bin_name!r} (probed project .venv/venv, "
+                f"node_modules/.bin, $UCW_HOME/venv, then PATH)"
+            ),
         }
 
     start = time.perf_counter()
     try:
         cp = subprocess.run(
-            command,
+            [resolved, *command[1:]],
             cwd=project_root,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=os.environ.copy(),
+            env=_gate_env(project_root),
         )
     except subprocess.TimeoutExpired:
         elapsed_ms = int((time.perf_counter() - start) * 1000)
@@ -442,6 +560,27 @@ def _setup_skip(result: dict[str, Any], gate_name: str,
     return result
 
 
+def _strict_fail(result: dict[str, Any], gate_name: str,
+                 install_cmd: list[str] | None) -> dict[str, Any]:
+    """Under strict gates a missing tool is a FAILURE, not a skip: at
+    verify/land (or with auto-mode driving) nobody would notice the skip
+    before code ships."""
+    detail = (f"Run `{' '.join(install_cmd)}` (or install.sh --reinstall-deps), "
+              if install_cmd else
+              "Install it (or run install.sh --reinstall-deps), ")
+    original = (result.get("summary") or "").strip()
+    result.update({
+        "passed": False,
+        "strict_tooling_failure": True,
+        "summary": (
+            f"{gate_name} gate FAILED (strict): tool missing — install or run "
+            f"install.sh --reinstall-deps. {detail}then re-run verify."
+            + (f"\n\nOriginal output:\n{original}" if original else "")
+        )[:2000],
+    })
+    return result
+
+
 def run_verification(
     project_root: Path,
     *,
@@ -451,6 +590,7 @@ def run_verification(
     run_all: bool = False,
     auto_install: bool = False,
     install_timeout: int = 300,
+    strict: bool | None = None,
 ) -> dict[str, Any]:
     """Run the gate suite (or a single explicit command).
 
@@ -460,7 +600,12 @@ def run_verification(
     `auto_install` — when a gate fails because its tooling isn't installed,
     run the project's install command ONCE and retry that gate (used in
     auto-mode). Otherwise such a gate is setup-skipped, not failed.
+    `strict` — treat a missing tool as a gate FAILURE instead of a
+    setup-skip. None (default) auto-detects via `strict_gates()`: phase
+    verify/land or auto-mode level >= 2.
     """
+    if strict is None:
+        strict = strict_gates(project_root)
     if command is not None:
         single = _run_one(project_root, command, timeout=timeout)
         single["source"] = "explicit"
@@ -505,9 +650,13 @@ def run_verification(
                     retry["install"] = result["install"]
                     result = retry
             # If still missing (no auto-install, install unavailable, install
-            # failed, or retry still can't find the tool) → setup-skip.
+            # failed, or retry still can't find the tool) → setup-skip, or a
+            # hard failure when strict gates are in force.
             if result.get("tooling_missing"):
-                _setup_skip(result, step["name"], install_cmd)
+                if strict:
+                    _strict_fail(result, step["name"], install_cmd)
+                else:
+                    _setup_skip(result, step["name"], install_cmd)
 
         gates.append(result)
         if not result["passed"] and not run_all:
@@ -530,6 +679,103 @@ def run_verification(
         "setup_skipped": setup_skipped,
         "setup_hint": setup_hint,
     }
+
+
+# ---- report + tree-keyed cache ---------------------------------------------
+# Every CLI run persists its JSON result to .ucw/state/verify-report.json so
+# other tools (reviewer lanes, /ucw ship) read one canonical artifact. A
+# passing full-suite run is additionally cached at .ucw/state/last-verify.json
+# keyed by the working tree (HEAD sha + sha256 of `git diff HEAD` output);
+# re-verifying an unchanged tree — e.g. /ucw ship right after a passing
+# Stop-hook verify — is a cache hit that skips the re-run ("cached PASS").
+
+REPORT_FILE = Path(".ucw") / "state" / "verify-report.json"
+CACHE_FILE = Path(".ucw") / "state" / "last-verify.json"
+
+
+def _git(project_root: Path, *args: str) -> str | None:
+    try:
+        cp = subprocess.run(
+            ["git", *args], cwd=project_root,
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
+    return cp.stdout if cp.returncode == 0 else None
+
+
+def tree_key(project_root: Path) -> str | None:
+    """Cache key for the current working tree: HEAD sha + sha256 of the
+    uncommitted diff. None outside a git repo (no caching there).
+
+    Note: untracked files don't appear in `git diff HEAD` — that's the agreed
+    key contract; `--no-cache` covers the rare case where it matters.
+    """
+    head = _git(project_root, "rev-parse", "HEAD")
+    if head is None:
+        return None
+    diff = _git(project_root, "diff", "HEAD")
+    if diff is None:
+        return None
+    digest = hashlib.sha256(diff.encode("utf-8", "replace")).hexdigest()
+    return f"{head.strip()}:{digest}"
+
+
+def write_report(project_root: Path, result: dict[str, Any]) -> None:
+    """Persist the run's JSON result to .ucw/state/verify-report.json (always)."""
+    path = project_root / REPORT_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_cached_pass(
+    project_root: Path, *, only: list[str] | None, strict: bool,
+) -> dict[str, Any] | None:
+    """Return the cached result when the tree is unchanged since the last
+    passing run of the same gate subset; else None.
+
+    A strict run refuses a cached pass that setup-skipped any gate — under
+    strict those skips would have been failures.
+    """
+    key = tree_key(project_root)
+    if key is None:
+        return None
+    cache = _load_json(project_root / CACHE_FILE)
+    if not cache or cache.get("key") != key:
+        return None
+    if cache.get("gates_only") != (only or "all"):
+        return None
+    result = cache.get("result")
+    if not isinstance(result, dict) or not result.get("passed") or result.get("skipped"):
+        return None
+    if strict and result.get("setup_skipped"):
+        return None
+    return result
+
+
+def record_cache(
+    project_root: Path, result: dict[str, Any], *, only: list[str] | None,
+) -> None:
+    """Record a passing full-suite run keyed by the current tree."""
+    if not result.get("passed") or result.get("skipped"):
+        return
+    key = tree_key(project_root)
+    if key is None:
+        return
+    path = project_root / CACHE_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "key": key,
+            "gates_only": only or "all",
+            "recorded_at": int(time.time()),
+            "result": result,
+        }, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 # ---- CLI ------------------------------------------------------------------
@@ -566,6 +812,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--auto-install", action="store_true",
                         help="if a gate's tooling isn't installed, run the project's install "
                              "command once and retry (else such a gate is skipped, not failed)")
+    parser.add_argument("--strict", dest="strict", action="store_true", default=None,
+                        help="treat a missing tool as a gate FAILURE (auto-detected from "
+                             "phase verify/land or auto-mode level >= 2 when omitted)")
+    parser.add_argument("--no-strict", dest="strict", action="store_false",
+                        help="force non-strict: missing tooling setup-skips even at verify/land")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="ignore .ucw/state/last-verify.json and re-run every gate")
     parser.add_argument("--json", action="store_true", help="emit JSON (default behavior)")
     args = parser.parse_args(argv)
 
@@ -577,11 +830,30 @@ def main(argv: list[str] | None = None) -> int:
         only = [n for n in names if n in GATE_ORDER] or None
     if only is None:
         only = _gates_from_env()
+    strict = strict_gates(project_root) if args.strict is None else args.strict
+
+    if command is None and not args.no_cache:
+        cached = load_cached_pass(project_root, only=only, strict=strict)
+        if cached is not None:
+            result = {
+                **cached,
+                "cached": True,
+                "summary": ("cached PASS — tree unchanged since the last passing "
+                            "verify (--no-cache forces a re-run)"),
+            }
+            write_report(project_root, result)
+            json.dump(result, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+            return 0
 
     result = run_verification(
         project_root, timeout=args.timeout, command=command,
         only=only, run_all=args.all, auto_install=args.auto_install,
+        strict=strict,
     )
+    write_report(project_root, result)
+    if command is None:
+        record_cache(project_root, result, only=only)
     json.dump(result, sys.stdout, indent=2)
     sys.stdout.write("\n")
 

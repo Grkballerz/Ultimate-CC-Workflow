@@ -125,8 +125,25 @@ only after that verification passes.
 
 1. Check auto-mode: `AUTO_LEVEL=$($HOME/.claude/ucw/bin/ucw-auto.py level)`
 2. Phase: `$HOME/.claude/ucw/bin/ucw-phase.py set verify`
-3. Invoke the **verifier** subagent. Block on any gate failure.
-4. Invoke the **reviewer** subagent against the diff. Block on critical findings.
+3. Spawn the **verifier** AND **reviewer** subagents IN PARALLEL — one
+   message, two Task calls; neither depends on the other's output:
+   - **verifier** — runs `$HOME/.claude/ucw/bin/ucw-verify.py --repo .`
+     (never a hand-rolled gate suite). The CLI always writes its JSON
+     result to `.ucw/state/verify-report.json`. A "cached PASS" served
+     from the tree-keyed `.ucw/state/last-verify.json` cache is a VALID
+     pass — at auto-level >= 3 the Stop-hook verify that triggered ship
+     already recorded the cache entry, so ship's verify is normally a
+     cache hit and costs ~0s.
+   - **reviewer** — reviews the diff and WRITES its report to
+     `.ucw/state/review-report.md`. Skip this spawn entirely when
+     `.ucw/reviews/<HEAD-sha>/` already holds a passing review gate
+     (`ucw-review.py gate` exits 0 for the current HEAD) — a full
+     `/ucw review` already covered this exact tree; don't pay twice.
+4. Read BOTH FILES — `.ucw/state/verify-report.json` and
+   `.ucw/state/review-report.md`. The agents' return messages are
+   pointers only; the files are the deliverable. Block on any failed
+   gate (`"passed": false` in the verify report) and on any critical
+   review finding.
 5. If both pass: `$HOME/.claude/ucw/bin/ucw-phase.py set land`
    - **At AUTO_LEVEL < 3**: confirm with user before committing
      (`AskUserQuestion` summarizing the diff + commit message).
@@ -165,38 +182,64 @@ pipeline below; `quick` behaves exactly as if `--quick` had been passed.
 An explicit flag always wins over the setting. Full pipeline:
 
 1. `$HOME/.claude/ucw/bin/ucw-review.py scope --persist [--since $SINCE]`
-2. Fan out to 9 narrow reviewer subagents (`reviewer-correctness`, `reviewer-injection`,
+   — the slimmed output reports `lanes` (concern → scope count) and
+   persists the full (file, concern) list to `scope.json`.
+2. Reviewer fan-out — IN PARALLEL: one message, one Task call per lane.
+   Spawn ONLY the lanes whose concern appears in the scope output's
+   `lanes` map with a non-zero count (a lane with no files in scope is
+   neither spawned nor expected at the gate). The 9 possible lanes:
+   `reviewer-correctness`, `reviewer-injection`,
    `reviewer-deserialization`, `reviewer-auth`, `reviewer-performance`,
-   `reviewer-data-loss`, `reviewer-api-compat`, `reviewer-tests`, `reviewer-docs`).
-   Each invokes `ucw-review.py add-finding ...` to persist findings.
+   `reviewer-data-loss`, `reviewer-api-compat`, `reviewer-tests`,
+   `reviewer-docs`. Each invokes `ucw-review.py add-finding ...` to
+   persist findings and ALWAYS ends by recording its completion receipt:
+   `ucw-review.py lane-done <lane>` (e.g. `lane-done correctness`).
    If the Kimi lane is enabled (see `--with-kimi` below), launch
-   `$HOME/.claude/ucw/bin/ucw-kimi-opinion.py [--since $SINCE]` as a 10th
-   PARALLEL fan-out lane alongside these 9 — not serially after them.
-3. For each finding: spawn the **disprover** subagent (model: haiku — different from
-   reviewers, that's the cross-audit invariant). Disprover cannot generate new
-   findings. It calls `ucw-review.py disprove <id> <verdict> ...`.
-   If the disprove step is routed to Kimi (see `--disprover-model` below),
-   run `$HOME/.claude/ucw/bin/ucw-kimi-disprove.py <id>` per finding instead.
-4. For each security finding (injection / deserialization / auth):
-   spawn the **reachability** subagent. Calls `ucw-review.py reachability <id> <verdict> ...`.
-5. `$HOME/.claude/ucw/bin/ucw-review.py dedup`
-6. `$HOME/.claude/ucw/bin/ucw-review.py gate` — exits 2 on unack'd effective-critical
-7. `$HOME/.claude/ucw/bin/ucw-review.py summary --format markdown` for the user
+   `$HOME/.claude/ucw/bin/ucw-kimi-opinion.py [--since $SINCE]` in the
+   SAME parallel wave as a background lane alongside the reviewers —
+   never serially after them. The Kimi lane is advisory and records no
+   receipt: do NOT list it in `--expect-lanes`.
+3. `$HOME/.claude/ucw/bin/ucw-review.py dedup` — runs BEFORE any
+   disprover spawns so near-duplicate findings are merged first and a
+   duplicate is never paid for twice.
+4. Cross-audit wave — spawn IN PARALLEL, one message, all Task calls
+   together:
+   - a **disprover** subagent per surviving finding, for critical + major
+     findings only (minor/nit are not worth a disprover invocation).
+     Model: haiku — different from the reviewers, that's the cross-audit
+     invariant. Disprover cannot generate new findings. It calls
+     `ucw-review.py disprove <id> <verdict> ...`.
+     If the disprove step is routed to Kimi (see `--disprover-model` below),
+     run `$HOME/.claude/ucw/bin/ucw-kimi-disprove.py <id>` per finding instead.
+   - a **reachability** subagent per security finding (injection /
+     deserialization / auth), in this SAME wave — not a serial pass after
+     the disprovers. Calls `ucw-review.py reachability <id> <verdict> ...`.
+5. `$HOME/.claude/ucw/bin/ucw-review.py gate --expect-lanes <lanes>` where
+   `<lanes>` is the comma-separated list of lanes you actually spawned in
+   step 2 (e.g. `correctness,tests,docs`) — exits 2 on unack'd
+   effective-critical; exits 3 listing lanes that never recorded a
+   `lane-done` receipt, so a reviewer that died silently no longer looks
+   identical to a clean lane.
+6. `$HOME/.claude/ucw/bin/ucw-review.py summary --format markdown` for the
+   user — includes the pending-disprove count (findings still awaiting a
+   disprover verdict).
 
 Optional flags (both opt-in, both default off):
 
 - `--with-kimi` — adds the `kimi-second-opinion` lane: one whole-diff pass
-  through the claude-kimi bridge (`bin/ucw-kimi-opinion.py`), run in
-  PARALLEL with the 9 reviewer subagents as a 10th fan-out lane. Its
-  findings are persisted via the same `add-finding` path and flow through
-  the normal disprove → dedup → gate stages — no special treatment.
+  through the claude-kimi bridge (`bin/ucw-kimi-opinion.py`), launched in
+  the SAME parallel fan-out wave as the reviewer subagents (background).
+  Its findings are persisted via the same `add-finding` path and flow
+  through the normal dedup → disprove → gate stages — no special
+  treatment, except that it records no lane receipt (advisory lane;
+  leave it out of `--expect-lanes`).
   Expect ~30-90s of extra wall-clock latency typically (the invocation
   timeout defaults to 300s, tunable via the `kimi.timeout_secs` setting)
   and note that Kimi tokens bill separately from Claude. When the flag
   is absent, consult
   `ucw-settings.py get kimi.review` — if it resolves true, run the lane
   exactly as if `--with-kimi` had been passed.
-- `--disprover-model kimi` — routes the disprove step (step 3) through
+- `--disprover-model kimi` — routes the disprove step (step 4) through
   `bin/ucw-kimi-disprove.py` so Kimi K3 is the opposing model. The
   default is unchanged: the haiku **disprover** subagent. When the flag
   is absent, consult `ucw-settings.py get kimi.disprover` — `haiku`
@@ -422,6 +465,8 @@ Key registry:
 | `ship.push` | bool | `true` | push the branch after commit (consulted by the `/ucw ship` land step when `--no-push` is absent) |
 | `ship.pr` | bool | `false` | open a draft PR after push (consulted by the `/ucw ship` PR step when `--pr` is absent) |
 | `scribe.auto` | bool | `true` | run the scribe automatically after Land (consulted by the `/ucw ship` scribe step) |
+| `auto.default_level` | int | `4` | auto-mode level 1-4 used by bare `/ucw auto on` (consulted by `ucw-auto` when the level argument is absent) |
+| `auto.retry_cap` | int | `3` | max consecutive verify-fail retries at auto-mode level 2+ (consulted by the stop-hook retry loop when `on --retry-cap` is absent) |
 
 Every key above is consulted by its named consumer — none is inert.
 
@@ -437,9 +482,41 @@ resolution falls through. Unknown keys are rejected (exit 2).
 
 ---
 
+## Subagent delivery & recovery
+
+Applies to every subcommand that spawns subagents (`plan`, `ship`,
+`review`, `audit`, `scribe`). The proven recovery ladder:
+
+1. **Prefer file deliverables + tree verification.** Task prompts must name
+   a concrete output file (`.ucw/state/verify-report.json`,
+   `.ucw/state/review-report.md`, `lane-done` receipts, edited source).
+   When an agent returns, verify the TREE — the file exists and is fresh —
+   before trusting anything the agent said. The return message is a
+   pointer, never the deliverable.
+2. **Message-delivered reports get ONE nudge.** If an agent was supposed to
+   report back and nothing arrived, send exactly one nudge naming the
+   channel: "reply via SendMessage(to: main) with the file path you wrote".
+   One nudge, not a conversation.
+3. **Then read the agent's transcript.** If the nudge produces nothing,
+   read the agent's transcript/output directly — dead agents usually died
+   AFTER doing most of the work, and the transcript shows exactly where.
+4. **NEVER full-rerun a partially-complete agent.** Verify tree state
+   (files written, receipts recorded, tests passing) and finish the
+   remaining delta yourself or with a narrowly-scoped follow-up task.
+   Re-running from scratch pays the whole cost again and often conflicts
+   with the partial work already on disk.
+
+---
+
 ## help
 
-Print the dispatch table at the top of this file.
+Print the dispatch table at the top of this file. For deeper discovery —
+listing every CLI helper, subagent, hook, and skill UCW ships — run
+`$HOME/.claude/ucw/bin/ucw-help.py [bin|agents|commands|hooks|skills]`.
+
+(Installer plumbing such as `bin/ucw-merge-settings.py` — the deep-merge
+helper install.sh uses to splice UCW hooks into an existing Claude Code
+`settings.json` — is invoked by install.sh, not dispatched from here.)
 
 ---
 

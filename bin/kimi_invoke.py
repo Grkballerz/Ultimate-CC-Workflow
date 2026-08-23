@@ -9,6 +9,10 @@ answer to stdout. This module wraps that call with:
     stdout, so chatter around the payload doesn't break callers)
   - a raw mode that skips JSON extraction entirely (any non-empty stdout
     is success) for prose answers like reviews and summaries
+  - API-error detection: claude-kimi prints auth/quota failures ("Failed
+    to authenticate. API Error: 403 ...") to STDOUT and exits 0, so both
+    modes screen short error-shaped output before classifying success and
+    return ok=False, error="api_error" without retrying
   - a NEVER-raise contract: every failure mode (timeout, nonzero exit,
     malformed output, missing binary) comes back as ok=False with `error` set
 
@@ -45,6 +49,23 @@ TIMEOUT_ENV = "UCW_KIMI_TIMEOUT_SECS"
 MODEL_ENV = "UCW_KIMI_MODEL"
 DEFAULT_TIMEOUT_SECS = 300
 DEFAULT_MODEL = "kimi-k3"
+
+# claude-kimi prints API/billing failures to STDOUT and exits 0 (observed
+# live: "Failed to authenticate. API Error: 403 You've reached your usage
+# limit..."). Substrings below mark such output as an error — but only when
+# the whole output is short AND the match sits near the start, so a long
+# legitimate answer that merely *discusses* rate limits is never flagged.
+API_ERROR_PATTERNS = (
+    "failed to authenticate",
+    "api error: 4",
+    "api error: 5",
+    "usage limit",
+    "rate limit",
+    "quota",
+    "invalid authentication",
+)
+API_ERROR_MAX_LEN = 800     # real answers run longer than error lines
+API_ERROR_SCAN_WINDOW = 200  # pattern must appear this close to the start
 
 
 # ---- lenient JSON extraction -------------------------------------------------
@@ -184,6 +205,23 @@ def _fail(raw: str, error: str) -> dict:
     return {"ok": False, "data": None, "raw": raw, "error": error}
 
 
+def _is_api_error(out: str) -> bool:
+    """True when stdout looks like an API/billing error line, not an answer.
+
+    Exit-code checks miss these — claude-kimi reports them on stdout with
+    exit 0. Two guards keep false positives out: the stripped output must
+    be shorter than API_ERROR_MAX_LEN (error lines are terse, answers are
+    not), and the pattern must occur within the first API_ERROR_SCAN_WINDOW
+    characters (errors lead with the failure; answers that mention "rate
+    limit" mid-prose don't).
+    """
+    text = out.strip()
+    if not text or len(text) >= API_ERROR_MAX_LEN:
+        return False
+    head = text[:API_ERROR_SCAN_WINDOW].lower()
+    return any(pattern in head for pattern in API_ERROR_PATTERNS)
+
+
 def kimi_invoke(
     prompt: str,
     allowed_tools: list[str] | str | None = None,
@@ -212,6 +250,9 @@ def kimi_invoke(
     case). raw=True runs exactly one attempt — there is no malformed output
     to retry, so the budget isn't burned. Timeouts and nonzero exits fail
     immediately — they're deterministic, retrying just burns the budget.
+    So do API/billing errors printed to stdout with exit 0 (quota, rate
+    limit, auth): both modes screen for them before classifying success
+    and fail with error="api_error" — retrying a quota error wastes a call.
     """
     out = ""
     try:
@@ -236,6 +277,8 @@ def kimi_invoke(
                 stderr = (cp.stderr or "").strip()
                 detail = f": {stderr[:500]}" if stderr else ""
                 return _fail(out, f"claude-kimi exited {cp.returncode}{detail}")
+            if _is_api_error(out):
+                return _fail(out, "api_error")
             if raw:
                 if out.strip():
                     return {"ok": True, "data": None, "raw": out, "error": None}

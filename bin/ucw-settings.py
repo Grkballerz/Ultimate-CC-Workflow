@@ -83,6 +83,15 @@ REGISTRY: dict[str, Spec] = {
         "bool", True,
         "run the scribe automatically after Land (consulted by /ucw ship "
         "scribe step)"),
+    "auto.default_level": Spec(
+        "int", 4,
+        "auto-mode level 1-4 used by bare `/ucw auto on` (consulted by "
+        "ucw-auto when the level argument is absent)"),
+    "auto.retry_cap": Spec(
+        "int", 3,
+        "max consecutive verify-fail retries at auto-mode level 2+ "
+        "(consulted by the stop-hook retry loop when `on --retry-cap` "
+        "absent)"),
 }
 
 

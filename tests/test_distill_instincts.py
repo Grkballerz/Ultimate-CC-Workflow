@@ -60,6 +60,46 @@ def test_aggregate_groups_by_token(tmp_path):
     assert redis["uses"] == 1
 
 
+def test_confidence_grows_with_evidence(tmp_path):
+    """More uses at the same session spread must RAISE confidence — the old
+    (s + 1) / (n + 2) formula inverted this (more uses lowered it)."""
+    mod = _load()
+    from ucw_memory.db import MemoryDB
+    with MemoryDB(tmp_path / "memory.sqlite") as db:
+        # 3 uses over 3 sessions of postgres; 10 uses over 3 sessions of redis
+        for i in range(3):
+            db.note(scope="project", subject="api", predicate="uses", object_="postgres",
+                    reason=f"pg-{i}", source_session=f"s{i}")
+        for i in range(10):
+            db.note(scope="project", subject="api", predicate="uses", object_="redis",
+                    reason=f"rd-{i}", source_session=f"s{i % 3}")
+        cands = mod.aggregate(db)
+
+    pg = next(c for c in cands if c["trigger"] == "postgres")
+    rd = next(c for c in cands if c["trigger"] == "redis")
+    assert rd["confidence"] > pg["confidence"]
+
+
+def test_confidence_grows_with_session_spread(tmp_path):
+    """Same use count over more distinct sessions → higher confidence."""
+    mod = _load()
+    from ucw_memory.db import MemoryDB
+    with MemoryDB(tmp_path / "memory.sqlite") as db:
+        for i in range(4):  # 4 uses, 1 session
+            db.note(scope="project", subject="x", predicate="uses", object_="flask",
+                    reason=f"f-{i}", source_session="s0")
+        for i in range(4):  # 4 uses, 4 sessions
+            db.note(scope="project", subject="x", predicate="uses", object_="django",
+                    reason=f"d-{i}", source_session=f"s{i}")
+        cands = mod.aggregate(db)
+
+    one_session = next(c for c in cands if c["trigger"] == "flask")
+    four_sessions = next(c for c in cands if c["trigger"] == "django")
+    assert four_sessions["confidence"] > one_session["confidence"]
+    assert 0.0 < one_session["confidence"] <= 1.0
+    assert 0.0 < four_sessions["confidence"] <= 1.0
+
+
 def test_upsert_instincts_idempotent(tmp_path):
     mod = _load()
     from ucw_memory.db import MemoryDB

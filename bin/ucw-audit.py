@@ -196,6 +196,22 @@ def scan_agent_scopes(path: Path) -> list[Finding]:
     if re.search(r"review|audit|verify", name, re.IGNORECASE):
         write_tools = tools & {"Edit", "Write", "NotebookEdit"}
         if write_tools:
+            # A declared, confined write-scope demotes the finding to a visible
+            # nit: Write pinned to .ucw/state/ report artifacts cannot tamper
+            # with the sources under review. Edit/NotebookEdit are never
+            # demotable — they modify existing files.
+            scope_m = re.search(r"^write-scope:\s*(.+)$", front, re.MULTILINE)
+            if scope_m and write_tools == {"Write"}:
+                raw = scope_m.group(1).strip().strip("[]")
+                paths = [p.strip().strip("'\"") for p in raw.split(",") if p.strip()]
+                confined = paths and all(
+                    p.startswith(".ucw/state/") and ".." not in p for p in paths
+                )
+                if confined:
+                    return [Finding("nit", "agent", str(path), 0, "review_agent_writes",
+                                    f"agent '{name}' has Write pinned to {paths} via "
+                                    "write-scope (report artifact only) — demoted, "
+                                    "kept visible")]
             return [Finding("major", "agent", str(path), 0, "review_agent_writes",
                             f"agent '{name}' has write tools ({write_tools}) — should be read-only")]
     return []

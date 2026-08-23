@@ -9,10 +9,12 @@ Claude itself when `commands/ucw.md` (review subcommand) is dispatched. This scr
   disprove      — record a disprover verdict for a finding
   reachability  — record a reachability verdict (security findings only)
   dedup         — merge near-duplicate findings (same file+line, similar title)
-  gate          — exit 2 if any unack'd effective-critical findings remain
+  lane-done     — record a completion receipt for a reviewer lane
+  gate          — exit 2 if any unack'd effective-critical findings remain;
+                  exit 3 if --expect-lanes names lanes without receipts
   status        — current SHA's findings + summary
   approve       — record human ack for a finding
-  summary       — render markdown / json report
+  summary       — render markdown / json report (incl. pending-disprove count)
   list          — every finding across every reviewed SHA
 
 Storage lives under .ucw/reviews/<sha>/. See memory/ucw_memory/findings.py
@@ -29,6 +31,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -49,17 +52,27 @@ from ucw_memory.findings import (
 
 # ---- scope computation -------------------------------------------------------
 
+# Extensions the code-quality lanes (correctness/performance/tests) fan out
+# across. Prose (markdown), lockfiles, and config-only formats are deliberately
+# excluded — the docs lane owns prose, so review reports don't get re-reviewed.
+SOURCE_EXTENSIONS = (
+    "py", "js", "ts", "tsx", "jsx", "mjs", "go", "rs", "java", "rb", "php",
+    "c", "cc", "cpp", "h", "hpp", "sh", "bash", "sql",
+    "astro", "svelte", "vue", "swift", "kt", "scala",
+)
+_SOURCE_GLOBS = [f"**/*.{ext}" for ext in SOURCE_EXTENSIONS]
+
 # Each concern → file globs that the concern applies to.
 CONCERN_GLOBS: dict[str, list[str]] = {
-    "correctness":      ["**/*"],
+    "correctness":      _SOURCE_GLOBS,
     "injection":        ["**/*.py", "**/*.sh", "**/*.ts", "**/*.js", "**/*.go", "**/*.rs"],
     "deserialization":  ["**/*.py", "**/*.ts", "**/*.js", "**/*.go", "**/*.rs", "**/*.java", "**/*.rb"],
     "auth":             ["**/auth/**", "**/middleware/**", "**/handlers/**", "**/api/**", "**/routes/**"],
-    "performance":      ["**/*"],
+    "performance":      _SOURCE_GLOBS,
     "data-loss":        ["**/migrations/**", "**/schema/**", "**/*.sql", "**/models/**"],
     "api-compat":       ["**/api/**", "**/routes/**", "**/*.proto", "**/openapi*", "**/swagger*"],
-    "tests":            ["**/*"],
-    "docs":             ["**/.ucw/knowledge/**", "README*", "docs/**"],
+    "tests":            _SOURCE_GLOBS,
+    "docs":             ["**/.ucw/knowledge/**", "README*", "docs/**", "**/*.md"],
 }
 
 
@@ -165,16 +178,31 @@ def _store(args: argparse.Namespace) -> ReviewStore:
 def cmd_scope(args: argparse.Namespace) -> int:
     repo = Path(args.repo).resolve()
     scopes = compute_scopes(repo, base=args.since, head=args.head)
+    sha = args.sha or head_sha(repo)
     if args.persist:
-        store = ReviewStore(repo, args.sha or head_sha(repo))
+        # The orchestrator only needs the shape, not every (file, concern)
+        # pair — the full scope list lives in the persisted scope.json.
+        store = ReviewStore(repo, sha)
         store.write_scope(scopes)
-    payload = {
-        "sha": args.sha or head_sha(repo),
-        "base": args.since,
-        "scopes": scopes,
-        "scope_count": len(scopes),
-        "file_count": len({s["file"] for s in scopes}),
-    }
+        lanes: dict[str, int] = {}
+        for s in scopes:
+            lanes[s["concern"]] = lanes.get(s["concern"], 0) + 1
+        payload = {
+            "sha": sha,
+            "base": args.since,
+            "scope_count": len(scopes),
+            "file_count": len({s["file"] for s in scopes}),
+            "lanes": lanes,
+            "persisted": str(store.scope_path),
+        }
+    else:
+        payload = {
+            "sha": sha,
+            "base": args.since,
+            "scopes": scopes,
+            "scope_count": len(scopes),
+            "file_count": len({s["file"] for s in scopes}),
+        }
     json.dump(payload, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0
@@ -284,9 +312,55 @@ def cmd_dedup(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---- lane receipts -----------------------------------------------------------
+# Each reviewer lane records a completion receipt when it finishes. The gate
+# can then demand receipts for an expected lane set — a review where every
+# reviewer died before reporting no longer looks identical to a clean one.
+
+def _lane_receipts_path(store: ReviewStore) -> Path:
+    return store.dir / "lane-receipts.jsonl"
+
+
+def _lane_receipts(store: ReviewStore) -> dict[str, dict]:
+    """Latest receipt per lane, replayed from the append-only log."""
+    path = _lane_receipts_path(store)
+    if not path.exists():
+        return {}
+    receipts: dict[str, dict] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        lane = row.get("lane")
+        if lane:
+            receipts[lane] = row
+    return receipts
+
+
+def cmd_lane_done(args: argparse.Namespace) -> int:
+    store = _store(args)
+    receipt = {"lane": args.lane, "sha": store.sha, "completed_at": int(time.time())}
+    with _lane_receipts_path(store).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(receipt, ensure_ascii=False) + "\n")
+    json.dump(receipt, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
 def cmd_gate(args: argparse.Namespace) -> int:
     store = _store(args)
     summary = store.gate_summary()
+    missing_lanes: list[str] = []
+    if args.expect_lanes:
+        expected = [lane.strip() for lane in args.expect_lanes.split(",") if lane.strip()]
+        done = _lane_receipts(store)
+        missing_lanes = [lane for lane in expected if lane not in done]
+        summary["expected_lanes"] = expected
+        summary["missing_lanes"] = missing_lanes
     if args.json:
         json.dump(summary, sys.stdout, indent=2)
         sys.stdout.write("\n")
@@ -294,6 +368,8 @@ def cmd_gate(args: argparse.Namespace) -> int:
         _print_gate_text(summary)
     if summary["unack_critical"] > 0:
         return 2
+    if missing_lanes:
+        return 3
     if args.strict and summary["by_severity"].get("major", 0) > 0:
         return 3
     return 0
@@ -322,6 +398,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pending_disprove(findings: list[Finding]) -> int:
+    """Findings no disprover has ruled on yet — still awaiting cross-audit."""
+    return sum(1 for f in findings if not f.disprover_verdict)
+
+
 def cmd_summary(args: argparse.Namespace) -> int:
     store = _store(args)
     findings = store.all()
@@ -332,6 +413,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
                 "findings": [f.as_dict() | {"effective_severity": _effective_severity(f)}
                              for f in findings],
                 "gate": store.gate_summary(),
+                "pending_disprove": _pending_disprove(findings),
             },
             sys.stdout, indent=2,
         )
@@ -382,6 +464,12 @@ def _print_gate_text(summary: dict) -> None:
             print(f"     {fid}  (use: ucw-review.py approve {fid} --reason ...)")
     else:
         print("\n  ✓ no unack'd critical findings")
+    if summary.get("expected_lanes") is not None:
+        missing = summary.get("missing_lanes", [])
+        if missing:
+            print(f"  ⛔ missing lane receipt(s): {', '.join(missing)}")
+        else:
+            print(f"  ✓ all {len(summary['expected_lanes'])} expected lane(s) reported done")
 
 
 def _render_markdown(store: ReviewStore, findings: list[Finding]) -> str:
@@ -392,6 +480,9 @@ def _render_markdown(store: ReviewStore, findings: list[Finding]) -> str:
     out.append("| --- | ---: |")
     for sev in SEVERITIES:
         out.append(f"| {sev} | {by.get(sev, 0)} |")
+    out.append("")
+    pending = _pending_disprove(findings)
+    out.append(f"**Pending disprove:** {pending} finding(s) awaiting a disprover verdict")
     out.append("")
     if summary["unack_critical"]:
         out.append(f"> ⛔ **{summary['unack_critical']} unacknowledged critical finding(s)** — `/ucw review approve <id>` to ack with reason.")
@@ -479,10 +570,19 @@ def main(argv: list[str] | None = None) -> int:
                         "1.0 = require identical titles.")
     p.set_defaults(func=cmd_dedup)
 
-    p = sub.add_parser("gate", help="exit 2 on unack'd criticals (3 on --strict + major)")
+    p = sub.add_parser("lane-done", help="record a reviewer lane completion receipt")
+    _add_common(p)
+    p.add_argument("lane", help="reviewer lane name (e.g. correctness, injection)")
+    p.set_defaults(func=cmd_lane_done)
+
+    p = sub.add_parser("gate", help="exit 2 on unack'd criticals (3 on --strict + major, "
+                                    "or on missing lane receipts)")
     _add_common(p)
     p.add_argument("--json", action="store_true")
     p.add_argument("--strict", action="store_true")
+    p.add_argument("--expect-lanes",
+                   help="comma-separated lane names that must have completion receipts; "
+                        "any missing receipt fails the gate (exit 3)")
     p.set_defaults(func=cmd_gate)
 
     p = sub.add_parser("approve", help="record human ack for a finding")

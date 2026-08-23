@@ -72,15 +72,8 @@ def test_ucw_dispatcher_exists():
     assert (REPO_ROOT / "commands" / "ucw.md").exists()
 
 
-def test_ucw_dispatcher_documents_each_subcommand():
-    """All the subcommands the README/docs promise must be dispatched by ucw.md."""
-    text = (REPO_ROOT / "commands" / "ucw.md").read_text(encoding="utf-8")
-    expected_subcommands = (
-        "status", "init", "plan", "ship", "review", "audit",
-        "recall", "pin", "scribe", "distill", "dashboard",
-        "watch", "unwatch", "worktree", "phase",
-    )
-    for sub in expected_subcommands:
-        # Either as a heading (## subcmd) or in the dispatch table at the top
-        assert f"## {sub}" in text or f"  {sub} " in text or f"  {sub}\n" in text, \
-            f"commands/ucw.md doesn't document the `{sub}` subcommand"
+# NOTE: the old test_ucw_dispatcher_documents_each_subcommand lived here with
+# a hardcoded 15-item subcommand tuple that went stale (missed prefs, ask,
+# opinion, auto, settings, resume). It is superseded by
+# tests/test_dispatch_drift.py, which PARSES the dispatch table from
+# commands/ucw.md and cross-checks sections, bin/ scripts, and README.md.

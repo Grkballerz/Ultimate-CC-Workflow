@@ -4,7 +4,8 @@ subprocess.run is ALWAYS mocked here: these tests make zero network calls
 and never invoke the real claude-kimi binary. What we verify is the
 plumbing around it — command construction, timeout/model resolution
 (env > project settings > default), raw mode, lenient JSON extraction
-(last block wins), retry-on-malformed, and the never-raise failure contract.
+(last block wins), retry-on-malformed, API-error screening (billing/quota
+lines printed to stdout with exit 0), and the never-raise failure contract.
 """
 from __future__ import annotations
 
@@ -261,6 +262,100 @@ def test_invoke_raw_mode_fails_on_empty_stdout_without_retry(monkeypatch):
     assert run.call_count == 1
     assert result["ok"] is False
     assert "empty" in result["error"]
+
+
+# ---- API-error detection -----------------------------------------------------
+
+# Observed live: claude-kimi printed this to STDOUT and exited 0.
+BILLING_403 = (
+    "Failed to authenticate. API Error: 403 You've reached your usage "
+    "limit. Your limit will reset later."
+)
+
+
+def test_invoke_raw_mode_flags_billing_403_as_api_error(monkeypatch):
+    mod = _load()
+    run = mock.Mock(return_value=_completed(BILLING_403))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("review this diff", raw=True, retries=3)
+
+    assert run.call_count == 1  # quota errors are never retried
+    assert result["ok"] is False
+    assert result["error"] == "api_error"
+    assert result["data"] is None
+    assert result["raw"] == BILLING_403  # raw preserved for diagnostics
+
+
+def test_invoke_json_mode_flags_billing_403_without_burning_retries(monkeypatch):
+    mod = _load()
+    run = mock.Mock(return_value=_completed(BILLING_403))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("classify the change", retries=3)
+
+    assert run.call_count == 1  # NOT retried as merely-malformed output
+    assert result["ok"] is False
+    assert result["error"] == "api_error"
+    assert result["data"] is None
+    assert result["raw"] == BILLING_403
+
+
+def test_invoke_flags_other_api_error_shapes(monkeypatch):
+    mod = _load()
+    for line in (
+        "API Error: 429 Rate limit exceeded, retry after 60s",
+        "api error: 500 upstream provider unavailable",
+        "Invalid Authentication: the provided key was rejected",
+        "Quota exhausted for model kimi-k3",
+    ):
+        run = mock.Mock(return_value=_completed(line))
+        monkeypatch.setattr(mod.subprocess, "run", run)
+
+        result = mod.kimi_invoke("anything", raw=True)
+
+        assert result["ok"] is False, line
+        assert result["error"] == "api_error", line
+        assert run.call_count == 1
+
+
+def test_invoke_raw_mode_accepts_long_answer_discussing_rate_limits(monkeypatch):
+    mod = _load()
+    answer = (
+        "The middleware in src/api/limiter.py enforces a token-bucket "
+        "rate limit per client key and returns 429 once the quota runs "
+        "dry. The tests cover both branches. "
+    ) * 12  # ~2000 chars — a real review, not an error line
+    assert len(answer) > 1900
+    run = mock.Mock(return_value=_completed(answer))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("review the limiter", raw=True)
+
+    assert result["ok"] is True
+    assert result["error"] is None
+    assert result["raw"] == answer
+
+
+def test_invoke_raw_mode_accepts_short_answer_mentioning_rate_limit_late(monkeypatch):
+    mod = _load()
+    answer = (
+        "Verdict: the diff is correct and the new branch is covered by "
+        "tests. One suggestion: document the retry/backoff behavior in "
+        "docs/api/orders.md so operators know what to expect under "
+        "sustained pressure. Also log when clients start hitting the "
+        "configured rate limit ceiling."
+    )
+    # The mention sits past the scan window — position guard must not trip.
+    assert len(answer) < mod.API_ERROR_MAX_LEN
+    assert answer.lower().index("rate limit") > mod.API_ERROR_SCAN_WINDOW
+    run = mock.Mock(return_value=_completed(answer))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("review the diff", raw=True)
+
+    assert result["ok"] is True
+    assert result["error"] is None
 
 
 # ---- timeout / model resolution ----------------------------------------------
