@@ -22,6 +22,15 @@
 - [x] make validate green + CHANGELOG.md entry
 - [x] bin/ucw-settings.py — list/get/set/unset over .ucw/state/settings.json; typed registry (kimi.review, kimi.disprover, kimi.offload, kimi.model, kimi.timeout_secs, review.default, ship.push, ship.pr, scribe.auto); precedence env UCW_<KEY> > project > default; + tests/test_settings_cli.py
 - [x] commands/ucw.md settings section + dispatch row; kimi flags consult settings when absent; [kimi] tags honored only when kimi.offload=true (auto-mode kill-switch); + tests/test_settings_command.py
+
+### Audit-fixes wave (landed 2026-08-23, af5c5e1)
+- [x] A. bin/ucw-review.py: tighten CONCERN_GLOBS to code extensions; slim scope --persist output; add lane-done receipts + gate --expect-lanes + pending-disprove counts (QW1+WP2 core)
+- [x] B. bin/ucw-verify.py + hooks/stop.py + Makefile + install.sh: venv/.bin tool probing, strict mode (setup-skip=fail in verify/land phase or auto>=2), loud skips, provision pytest+ruff, verify-report.json + last-verify.json cache (WP1+WP4 core)
+- [x] C. bin/ucw-auto.py + bin/ucw-settings.py + hooks/_hook_common.py + dashboard/cli.py: auto.default_level + auto.retry_cap keys, status shows auto mode + review gate + distill zero-yield warning, fix /scribe hint (QW3+WP3 status)
+- [x] D. memory/ucw_memory/retrieval.py + distill.py + hooks/user-prompt-submit.py: pin quota in recall, pinned-fact injection, distill regex resurrection + confidence fix (QW4+WP3)
+- [x] E. bin/kimi_invoke.py: API-error-pattern detection in raw mode (quota 403 exits 0 bug)
+- [x] F. commands/ucw.md + agents/*.md + README + drift test: pipeline reorder, ship file-deliverables + parallel gatekeepers + skip-redundant-review, nudge/recovery ladder, lane receipts docs, README sync + parametrized dispatch-drift test (QW1/2/5/6 + WP2/4 docs)
+- [x] G. Full validate + CHANGELOG + per-fix spot verification
 <!-- scribe-done-end -->
 
 ## In progress
