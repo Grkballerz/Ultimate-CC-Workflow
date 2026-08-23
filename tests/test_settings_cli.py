@@ -63,6 +63,8 @@ def test_get_default_values(project, capsys):
         ("ship.push", True),
         ("ship.pr", False),
         ("scribe.auto", True),
+        ("auto.default_level", 4),
+        ("auto.retry_cap", 3),
     ]:
         rc = mod.main(["get", key])
         body = json.loads(capsys.readouterr().out)
@@ -142,6 +144,54 @@ def test_kimi_timeout_secs_default_is_300(project, capsys):
     body = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert body == {"key": "kimi.timeout_secs", "value": 300, "source": "default"}
+
+
+# ---- auto-mode-consulted defaults --------------------------------------------
+
+def test_auto_default_level_key_registered(project, capsys):
+    """Bare `/ucw auto on` resolves its level from this key — default 4."""
+    mod = _load()
+    spec = mod.REGISTRY["auto.default_level"]
+    assert spec.type == "int"
+    assert spec.default == 4
+    assert "auto on" in spec.help  # names the consumer, like the other keys
+    rc = mod.main(["get", "auto.default_level"])
+    body = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert body == {"key": "auto.default_level", "value": 4, "source": "default"}
+
+
+def test_auto_retry_cap_key_registered(project, capsys):
+    """The stop-hook retry loop resolves its cap from this key — default 3."""
+    mod = _load()
+    spec = mod.REGISTRY["auto.retry_cap"]
+    assert spec.type == "int"
+    assert spec.default == 3
+    assert "retry" in spec.help
+    rc = mod.main(["get", "auto.retry_cap"])
+    body = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert body == {"key": "auto.retry_cap", "value": 3, "source": "default"}
+
+
+def test_auto_keys_set_round_trip(project, capsys):
+    mod = _load()
+    mod.main(["set", "auto.default_level", "2"])
+    capsys.readouterr()
+    mod.main(["set", "auto.retry_cap", "5"])
+    capsys.readouterr()
+
+    mod.main(["get", "auto.default_level"])
+    assert json.loads(capsys.readouterr().out)["value"] == 2
+    mod.main(["get", "auto.retry_cap"])
+    assert json.loads(capsys.readouterr().out)["value"] == 5
+
+
+def test_auto_keys_env_names(project):
+    """The env override names shared with ucw-auto / _hook_common."""
+    mod = _load()
+    assert mod._env_name("auto.default_level") == "UCW_AUTO_DEFAULT_LEVEL"
+    assert mod._env_name("auto.retry_cap") == "UCW_AUTO_RETRY_CAP"
 
 
 # ---- --repo flag -------------------------------------------------------------

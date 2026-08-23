@@ -267,3 +267,84 @@ def test_disprover_frontmatter_model_is_still_haiku():
     assert meta.get("model") == "haiku", \
         "agents/disprover.md must keep model: haiku — the Kimi route is a " \
         "separate opt-in path, not a change to the subagent"
+
+
+# ---- file-deliverable contracts (verify/review artifacts) --------------------
+# /ucw ship reads .ucw/state/verify-report.json + .ucw/state/review-report.md;
+# agent replies are pointers only. The agent defs must match those contracts.
+
+def test_verifier_invokes_canonical_cli():
+    """The verifier must run bin/ucw-verify.py, not a hand-rolled suite."""
+    body = (AGENTS_DIR / "verifier.md").read_text(encoding="utf-8")
+    assert "ucw-verify.py" in body, \
+        "agents/verifier.md must invoke bin/ucw-verify.py"
+    assert ".ucw/state/verify-report.json" in body, \
+        "agents/verifier.md must name the persisted report artifact"
+    assert "cached" in body.lower(), \
+        "agents/verifier.md must document that a cached PASS is valid"
+
+
+def test_reviewer_has_write_tool_for_its_report():
+    """The reviewer writes .ucw/state/review-report.md — it needs Write."""
+    meta = _parse_frontmatter(AGENTS_DIR / "reviewer.md")
+    tools = {t.strip() for t in meta.get("tools", "").strip("[]").split(",")}
+    assert "Write" in tools, \
+        "agents/reviewer.md must grant the Write tool for its report file"
+    body = (AGENTS_DIR / "reviewer.md").read_text(encoding="utf-8")
+    assert ".ucw/state/review-report.md" in body, \
+        "agents/reviewer.md must name its report file contract"
+    assert "pointer" in body.lower(), \
+        "agents/reviewer.md must say the reply is a pointer, not the report"
+
+
+def test_disprover_output_contract_is_the_cli_not_stdout_json():
+    """Regression: disprover.md used to demand 'exactly one JSON object on
+    stdout, nothing else' AND a CLI call — contradictory. The CLI won."""
+    text = (AGENTS_DIR / "disprover.md").read_text(encoding="utf-8")
+    assert "ucw-review.py disprove" in text, \
+        "disprover.md must record verdicts via the ucw-review.py disprove CLI"
+    assert "exactly one json object on stdout" not in text.lower(), \
+        "the stdout-JSON-only contract contradicts the CLI call — drop it"
+    assert "nothing else" not in text.lower(), \
+        "'nothing else' output constraints contradict the mandatory CLI call"
+
+
+def test_every_reviewer_lane_records_lane_done():
+    """Each lane must close with its ucw-review.py lane-done receipt so
+    `gate --expect-lanes` can distinguish clean lanes from dead ones."""
+    for concern in CONCERNS:
+        text = (AGENTS_DIR / "reviewers" / f"{concern}.md").read_text(encoding="utf-8")
+        assert f"lane-done {concern}" in text, \
+            f"reviewer-{concern}.md must end with `ucw-review.py lane-done {concern}`"
+
+
+# ---- pipeline-order doc contracts in commands/ucw.md -------------------------
+
+def test_review_documents_lane_receipts_and_expect_lanes():
+    text = _ucw_md()
+    assert "lane-done" in text, \
+        "commands/ucw.md review pipeline must record lane-done receipts"
+    assert "--expect-lanes" in text, \
+        "commands/ucw.md must gate with --expect-lanes over the spawned lanes"
+
+
+def test_review_disproves_only_critical_and_major_after_dedup():
+    """Disprovers run post-dedup and only on critical + major findings."""
+    text = _ucw_md()
+    assert "critical + major" in text and "dedup" in text, \
+        "review pipeline must disprove critical + major findings only, post-dedup"
+    # dedup step must come before the disprover wave in the numbered pipeline
+    dedup_idx = text.index("ucw-review.py dedup")
+    disprove_idx = text.index("ucw-review.py disprove")
+    assert dedup_idx < disprove_idx, \
+        "dedup must run BEFORE the disprover wave (duplicates never paid twice)"
+
+
+def test_ship_reads_both_report_files():
+    text = _ucw_md()
+    assert ".ucw/state/verify-report.json" in text, \
+        "ship must read the verifier's persisted JSON report"
+    assert ".ucw/state/review-report.md" in text, \
+        "ship must read the reviewer's persisted markdown report"
+    assert "ucw-verify.py" in text, \
+        "ship's verifier step must invoke bin/ucw-verify.py"

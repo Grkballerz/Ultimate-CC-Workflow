@@ -1,7 +1,9 @@
 """Hybrid retrieval: FTS5 + (optional) reranking via Claude or Voyage.
 
 Behavior:
-1. **Pinned facts** always included first, sorted by recency.
+1. **Pinned facts** get reserved slots first, sorted by recency — but capped
+   at ceil(k/3) so a large pin set can't crowd out query-relevant hits.
+   Pins beyond the cap still compete in the FTS pool like any other fact.
 2. **FTS5** pulls a pool of up to `fts_pool` BM25 hits.
 3. **Reranker** (if available) scores the FTS pool semantically and re-sorts.
 4. **Recency boost** breaks ties.
@@ -13,6 +15,7 @@ literal "embedding model is Claude" path corresponds to
 """
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -69,16 +72,23 @@ def recall(
     `reranker` lets tests inject a mock; production code passes None and we
     auto-detect via `rerank.make_reranker(rerank_provider)`.
     """
+    # Pinned facts get reserved slots capped at ceil(k/3) so 12+ pins can't
+    # crowd out every query-relevant hit. pinned_facts() orders newest-first,
+    # so the most recent pins win the reserved slots. Pins beyond the cap are
+    # NOT excluded from the FTS pool — they rank normally if they match.
     pinned = db.pinned_facts(scope=scope)
+    pin_cap = math.ceil(k / 3)
+    reserved = pinned[:pin_cap]
+    reserved_ids = {f.id for f in reserved}
     pinned_hits = [
         RecallHit(fact=f, score=10.0 + (1.0 / (1 + _age_seconds(f))), sources=("pinned",))
-        for f in pinned
+        for f in reserved
     ]
 
     fts_hits_raw = db.fts_search(query, limit=fts_pool, scope=scope) if query.strip() else []
     fts_facts = [
         (f, s) for f, s in fts_hits_raw
-        if not any(p.fact.id == f.id for p in pinned_hits)
+        if f.id not in reserved_ids
     ]
 
     # Decide whether to rerank.

@@ -276,3 +276,108 @@ def test_user_prompt_submit_resume_hint_points_to_plan_and_spec_when_present(pro
     ctx = body["hookSpecificOutput"]["additionalContext"]
     assert ".ucw/state/plan.md" in ctx
     assert ".ucw/state/spec.md" in ctx
+
+
+# ---- user-prompt-submit: pinned facts (QW4) ---------------------------------
+
+def _seed_memory_db(project: Path, n_pins: int = 2, reason: str | None = None) -> list[int]:
+    """Create .ucw/memory.sqlite with n pinned facts, oldest first."""
+    import time as _time
+
+    from ucw_memory.db import MemoryDB
+    now = int(_time.time())
+    ids = []
+    with MemoryDB(project / ".ucw" / "memory.sqlite") as db:
+        for i in range(n_pins):
+            fid = db.note(
+                scope="project", subject=f"rule-{i}", predicate="is",
+                object_=f"pinned-object-{i}",
+                reason=reason or f"pinned reason {i}",
+            )
+            db.conn.execute(
+                "UPDATE facts SET created_at = ? WHERE id = ?", (now - 1000 + i, fid)
+            )
+            db.pin(fid)
+            ids.append(fid)
+        db.conn.commit()
+    return ids
+
+
+def test_user_prompt_submit_injects_pinned_facts_on_first_prompt(project):
+    _seed_memory_db(project, n_pins=2)
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project), "session_id": "sess-1",
+        "prompt": "Hello there.",  # no keyword match — pinned block is the only injection
+    })
+    body = json.loads(out)
+    ctx = body["hookSpecificOutput"]["additionalContext"]
+    assert "UCW Memory (pinned)" in ctx
+    assert "pinned-object-0" in ctx
+    assert "pinned-object-1" in ctx
+    # Most recent pin first
+    assert ctx.index("pinned-object-1") < ctx.index("pinned-object-0")
+    # Marker recorded for session gating
+    assert (project / ".ucw" / "state" / "pinned-injected").read_text().strip() == "sess-1"
+
+
+def test_user_prompt_submit_pinned_facts_only_once_per_session(project):
+    _seed_memory_db(project, n_pins=1)
+    payload = {"cwd": str(project), "session_id": "sess-1", "prompt": "Hello there."}
+    _rc, out1, _ = _run("user-prompt-submit.py", payload)
+    assert "UCW Memory (pinned)" in out1
+    # Same session, second prompt → nothing injected
+    _rc, out2, _ = _run("user-prompt-submit.py", payload)
+    assert out2 == ""
+    # New session → injected again
+    _rc, out3, _ = _run("user-prompt-submit.py", {**payload, "session_id": "sess-2"})
+    assert "UCW Memory (pinned)" in out3
+
+
+def test_user_prompt_submit_pinned_facts_respects_char_budget(project):
+    _seed_memory_db(project, n_pins=20, reason="x" * 80)
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project), "session_id": "sess-1", "prompt": "Hello there.",
+    })
+    body = json.loads(out)
+    ctx = body["hookSpecificOutput"]["additionalContext"]
+    assert "UCW Memory (pinned)" in ctx
+    assert len(ctx) <= 600
+    # 20 pins at ~100 chars each can't all fit in 600
+    assert ctx.count("pinned-object-") < 20
+
+
+def test_user_prompt_submit_no_pinned_block_without_memory_db(project):
+    """No memory DB → no pinned block (and no marker side effects)."""
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project), "session_id": "sess-1", "prompt": "Hello there.",
+    })
+    assert out == ""
+    assert not (project / ".ucw" / "state" / "pinned-injected").exists()
+
+
+def test_user_prompt_submit_pinned_facts_fallback_session_marker(project):
+    """Without a payload session_id, the hook reuses last-session-start
+    (written by session-start.py) to distinguish sessions."""
+    _seed_memory_db(project, n_pins=1)
+    lss = project / ".ucw" / "state" / "last-session-start"
+    lss.write_text("1000\ts-alpha\tstartup\n")
+    payload = {"cwd": str(project), "prompt": "Hello there."}
+    _rc, out1, _ = _run("user-prompt-submit.py", payload)
+    assert "UCW Memory (pinned)" in out1
+    _rc, out2, _ = _run("user-prompt-submit.py", payload)
+    assert out2 == ""
+    # New session start recorded → inject again
+    lss.write_text("2000\ts-beta\tstartup\n")
+    _rc, out3, _ = _run("user-prompt-submit.py", payload)
+    assert "UCW Memory (pinned)" in out3
+
+
+def test_user_prompt_submit_pinned_block_after_resume_hint(project):
+    (project / ".ucw" / "state" / "phase").write_text("build\n")
+    _seed_memory_db(project, n_pins=1)
+    _rc, out, _ = _run("user-prompt-submit.py", {
+        "cwd": str(project), "session_id": "sess-1", "prompt": "Hello there.",
+    })
+    body = json.loads(out)
+    ctx = body["hookSpecificOutput"]["additionalContext"]
+    assert ctx.index("UCW resume") < ctx.index("UCW Memory (pinned)")

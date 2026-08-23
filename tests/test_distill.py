@@ -81,6 +81,101 @@ def test_extract_from_transcript(tmp_path):
     assert any("pytest" in o for o in objects)
 
 
+# ---- WP3: realistic transcript phrasing --------------------------------------
+
+def test_extract_contraction_subject_with_reason():
+    text = "We're using pnpm because the lockfile is deterministic across CI runs."
+    cands = extract_from_text(text)
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.subject == "we"
+    assert "using" in c.predicate
+    assert "pnpm" in c.object.lower()
+    assert "lockfile" in c.reason
+    assert c.confidence == 0.7
+
+
+def test_extract_verb_first_pinned_line():
+    """Terse decision note with no subject and no reason still extracts."""
+    cands = extract_from_text("pinned TS to 5.x")
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.subject == "we"
+    assert c.predicate == "pinned"
+    assert c.object == "TS to 5.x"
+    assert c.reason  # placeholder reason so the DB quality gate accepts it
+    assert c.confidence < 0.7  # reduced confidence without an explicit reason
+
+
+def test_extract_the_fix_was_to():
+    cands = extract_from_text("The fix was to add a mutex around the token refresh.")
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.subject == "the fix"
+    assert c.predicate == "was to"
+    assert "mutex" in c.object.lower()
+
+
+def test_extract_bullet_point_decision_line():
+    text = "- switched to the forks pool because vitest workers crashed on ffmpeg\n"
+    cands = extract_from_text(text)
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.predicate == "switched to"
+    assert "forks pool" in c.object.lower()
+    assert "vitest" in c.reason
+
+
+def test_extract_module_path_subject():
+    text = "bin/ucw-verify.py uses argparse because stdlib-only is a hard constraint."
+    cands = extract_from_text(text)
+    assert len(cands) == 1
+    assert cands[0].subject == "bin/ucw-verify.py"
+    assert "argparse" in cands[0].object
+
+
+def test_extract_dotted_name_subject():
+    text = "tailwind.config.mjs uses DESIGN.md tokens because it is the source of truth."
+    cands = extract_from_text(text)
+    assert len(cands) == 1
+    assert cands[0].subject == "tailwind.config.mjs"
+
+
+def test_extract_dont_use_imperative():
+    cands = extract_from_text("Don't use eval because it's unsafe with user input.")
+    assert len(cands) == 1
+    c = cands[0]
+    assert c.predicate == "don't use"
+    assert c.object.lower() == "eval"
+    assert "unsafe" in c.reason
+
+
+def test_extract_weak_verb_without_reason_still_dropped():
+    """Broadening must not relax the gate for weak verbs — 'we use X' alone
+    stays dropped; only strong decision verbs pass reasonless."""
+    assert extract_from_text("We use postgres in this project.") == []
+    assert extract_from_text("The user prefers vim") == []
+
+
+def test_extract_rejects_questions():
+    assert extract_from_text("Should we switch to bun because it's faster?") == []
+    assert extract_from_text("Why don't use we pnpm?") == []
+
+
+def test_extract_rejects_hedged_proposals():
+    assert extract_from_text("Maybe we should switch to bun because it's faster.") == []
+    assert extract_from_text("Maybe we switched to bun because it's faster.") == []
+    assert extract_from_text("Perhaps we're using the wrong pool because of threads.") == []
+
+
+def test_reasonless_strong_decision_survives_db_quality_gate(tmp_path):
+    """The placeholder reason must pass MemoryDB's non-empty-reason gate."""
+    cands = extract_from_text("pinned TS to 5.x")
+    with MemoryDB(tmp_path / "memory.sqlite") as db:
+        ids = write_candidates_to_db(cands, db, scope="project")
+    assert len(ids) == 1
+
+
 def test_write_candidates_to_db_round_trip(tmp_path):
     transcript = tmp_path / "session.jsonl"
     transcript.write_text(json.dumps({"message": {"content": "We use bun because it's fast."}}))

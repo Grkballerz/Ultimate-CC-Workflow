@@ -29,9 +29,10 @@ def _run(args: list[str], cwd: Path, env_extra: dict | None = None) -> tuple[int
     env = os.environ.copy()
     if env_extra:
         env.update(env_extra)
-    # Clear UCW_AUTO_MODE for deterministic CLI tests unless caller sets it
-    if env_extra is None or "UCW_AUTO_MODE" not in env_extra:
-        env.pop("UCW_AUTO_MODE", None)
+    # Clear ambient UCW_AUTO_* for deterministic CLI tests unless caller sets them
+    for var in ("UCW_AUTO_MODE", "UCW_AUTO_DEFAULT_LEVEL", "UCW_AUTO_RETRY_CAP"):
+        if env_extra is None or var not in env_extra:
+            env.pop(var, None)
     cp = subprocess.run(
         [sys.executable, str(BIN), *args],
         cwd=cwd, capture_output=True, text=True, env=env, timeout=10,
@@ -44,6 +45,11 @@ def project(tmp_path):
     (tmp_path / ".ucw" / "state").mkdir(parents=True)
     (tmp_path / ".git").mkdir()
     return tmp_path
+
+
+def _write_settings(project: Path, data: dict) -> None:
+    sp = project / ".ucw" / "state" / "settings.json"
+    sp.write_text(json.dumps(data), encoding="utf-8")
 
 
 # ---- on/off/status round-trip ----------------------------------------------
@@ -115,6 +121,58 @@ def test_level_subcommand_prints_integer(project):
 def test_level_when_off_is_zero(project):
     _rc, out, _ = _run(["level"], cwd=project)
     assert out.strip() == "0"
+
+
+# ---- auto.default_level setting (consulted by bare `on`) --------------------
+
+def test_bare_on_consults_default_level_setting(project):
+    _write_settings(project, {"auto.default_level": 2})
+    rc, out, _ = _run(["on"], cwd=project)
+    assert rc == 0
+    assert json.loads(out)["level"] == 2
+
+
+def test_explicit_level_beats_default_level_setting(project):
+    _write_settings(project, {"auto.default_level": 2})
+    rc, out, _ = _run(["on", "3"], cwd=project)
+    assert rc == 0
+    assert json.loads(out)["level"] == 3
+
+
+def test_env_default_level_beats_setting(project):
+    _write_settings(project, {"auto.default_level": 2})
+    _rc, out, _ = _run(["on"], cwd=project,
+                       env_extra={"UCW_AUTO_DEFAULT_LEVEL": "1"})
+    assert json.loads(out)["level"] == 1
+
+
+def test_invalid_default_level_setting_falls_back_to_4(project):
+    _write_settings(project, {"auto.default_level": 9})
+    _rc, out, _ = _run(["on"], cwd=project)
+    assert json.loads(out)["level"] == 4
+
+
+def test_invalid_env_default_level_falls_back_to_setting(project):
+    _write_settings(project, {"auto.default_level": 2})
+    _rc, out, _ = _run(["on"], cwd=project,
+                       env_extra={"UCW_AUTO_DEFAULT_LEVEL": "99"})
+    assert json.loads(out)["level"] == 2
+
+
+def test_default_on_level_helper_resolution_order(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_DEFAULT_LEVEL", raising=False)
+    assert ucw_auto.default_on_level(project) == 4
+    _write_settings(project, {"auto.default_level": 3})
+    assert ucw_auto.default_on_level(project) == 3
+    monkeypatch.setenv("UCW_AUTO_DEFAULT_LEVEL", "1")
+    assert ucw_auto.default_on_level(project) == 1
+
+
+def test_default_on_level_rejects_bool_setting(project, monkeypatch):
+    """JSON true is an int subclass — must not read as level 1."""
+    monkeypatch.delenv("UCW_AUTO_DEFAULT_LEVEL", raising=False)
+    _write_settings(project, {"auto.default_level": True})
+    assert ucw_auto.default_on_level(project) == 4
 
 
 # ---- retry-cap configuration -----------------------------------------------
@@ -236,6 +294,36 @@ def test_current_retry_cap_rejects_unreasonable_values(project, monkeypatch):
     assert ucw_auto.current_retry_cap(project) == 3
 
 
+# ---- auto.retry_cap setting (consulted by the stop-hook retry loop) ---------
+
+def test_retry_cap_setting_consulted_when_state_absent(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_RETRY_CAP", raising=False)
+    _write_settings(project, {"auto.retry_cap": 5})
+    assert ucw_auto.current_retry_cap(project) == 5
+
+
+def test_retry_cap_state_beats_setting(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_RETRY_CAP", raising=False)
+    _write_settings(project, {"auto.retry_cap": 5})
+    (project / ".ucw" / "state" / "auto-mode").write_text(
+        json.dumps({"level": 2, "retry_cap": 7})
+    )
+    assert ucw_auto.current_retry_cap(project) == 7
+
+
+def test_retry_cap_env_beats_setting(project, monkeypatch):
+    monkeypatch.setenv("UCW_AUTO_RETRY_CAP", "11")
+    _write_settings(project, {"auto.retry_cap": 5})
+    assert ucw_auto.current_retry_cap(project) == 11
+
+
+def test_retry_cap_invalid_setting_falls_back_to_default(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_RETRY_CAP", raising=False)
+    for bad in (0, -1, 200, "five", True):
+        _write_settings(project, {"auto.retry_cap": bad})
+        assert ucw_auto.current_retry_cap(project) == 3
+
+
 # ---- state file lives in the right place ----------------------------------
 
 def test_state_persisted_to_dot_ucw_state(project):
@@ -300,3 +388,33 @@ def test_hook_helper_matches_bin_on_malformed_state(project, monkeypatch):
     monkeypatch.delenv("UCW_AUTO_MODE", raising=False)
     (project / ".ucw" / "state" / "auto-mode").write_text("not json")
     assert _hook_level(project) == ucw_auto.current_level(project) == 0
+
+
+def _hook_retry_cap(project: Path) -> int:
+    """Import hooks/_hook_common from the repo and call auto_retry_cap."""
+    spec = importlib.util.spec_from_file_location(
+        "hook_common", REPO_ROOT / "hooks" / "_hook_common.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.auto_retry_cap({"cwd": str(project)})
+
+
+def test_hook_retry_cap_matches_bin_default(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_RETRY_CAP", raising=False)
+    assert _hook_retry_cap(project) == ucw_auto.current_retry_cap(project) == 3
+
+
+def test_hook_retry_cap_matches_bin_on_setting(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_RETRY_CAP", raising=False)
+    _write_settings(project, {"auto.retry_cap": 5})
+    assert _hook_retry_cap(project) == ucw_auto.current_retry_cap(project) == 5
+
+
+def test_hook_retry_cap_matches_bin_state_beats_setting(project, monkeypatch):
+    monkeypatch.delenv("UCW_AUTO_RETRY_CAP", raising=False)
+    _write_settings(project, {"auto.retry_cap": 5})
+    (project / ".ucw" / "state" / "auto-mode").write_text(
+        json.dumps({"level": 2, "retry_cap": 7})
+    )
+    assert _hook_retry_cap(project) == ucw_auto.current_retry_cap(project) == 7

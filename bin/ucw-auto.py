@@ -5,7 +5,8 @@ Auto-mode lets the agent run unattended through phase boundaries that
 would normally pause for user approval. There are four cumulative levels:
 
     1 = planner auto-accepts its own spec + plan and starts Build
-    2 = + retry loop on verify failure (up to UCW_AUTO_RETRY_CAP, default 3)
+    2 = + retry loop on verify failure (cap: UCW_AUTO_RETRY_CAP env >
+        `on --retry-cap` state > auto.retry_cap setting > 3)
     3 = + auto-commit + auto-push when verify passes
     4 = + auto-open draft PR + subscribe to PR activity for CI autofix
 
@@ -16,10 +17,16 @@ Hooks and commands MUST read via `current_level(project_root)` rather than
 parsing the file directly — that keeps the schema migratable.
 
 Usage:
-    ucw-auto.py on [level]      # default level 4 (full auto)
+    ucw-auto.py on [level]      # default: auto.default_level setting, else 4
     ucw-auto.py off             # clear state, disable
     ucw-auto.py status          # print current state (JSON)
     ucw-auto.py level           # print only the integer level (0 if off)
+
+Bare `on` (no level argument) resolves its level as
+UCW_AUTO_DEFAULT_LEVEL env > `auto.default_level` in the project's
+`.ucw/state/settings.json` > 4. An explicit level argument always wins.
+The settings file is read inline (same convention as kimi_invoke) —
+ucw-settings.py owns the registry.
 """
 from __future__ import annotations
 
@@ -33,6 +40,8 @@ from pathlib import Path
 VALID_LEVELS = (1, 2, 3, 4)
 DEFAULT_LEVEL_ON_BARE_ON = 4  # `/ucw auto on` with no number = full auto
 STATE_FILENAME = "auto-mode"
+SETTINGS_FILENAME = "settings.json"
+DEFAULT_LEVEL_ENV = "UCW_AUTO_DEFAULT_LEVEL"
 
 
 def _project_root(start: Path | None = None) -> Path:
@@ -46,6 +55,37 @@ def _project_root(start: Path | None = None) -> Path:
 def _state_path(project_root: Path | None = None) -> Path:
     root = project_root or _project_root()
     return root / ".ucw" / "state" / STATE_FILENAME
+
+
+def _read_settings(project_root: Path | None = None) -> dict:
+    """Project settings.json as a dict ({} on any failure).
+
+    Read inline rather than via ucw-settings.py — that file's hyphenated
+    name defeats plain import (same convention as kimi_invoke).
+    """
+    root = project_root or _project_root()
+    sp = root / ".ucw" / "state" / SETTINGS_FILENAME
+    try:
+        data = json.loads(sp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def default_on_level(project_root: Path | None = None) -> int:
+    """Level bare `on` uses when no argument is given.
+
+    Resolution: UCW_AUTO_DEFAULT_LEVEL env > `auto.default_level` setting
+    > DEFAULT_LEVEL_ON_BARE_ON. Out-of-range values fall through.
+    """
+    env = os.environ.get(DEFAULT_LEVEL_ENV, "").strip()
+    if env.isdigit() and int(env) in VALID_LEVELS:
+        return int(env)
+    stored = _read_settings(project_root).get("auto.default_level")
+    if (isinstance(stored, int) and not isinstance(stored, bool)
+            and stored in VALID_LEVELS):
+        return stored
+    return DEFAULT_LEVEL_ON_BARE_ON
 
 
 def current_level(project_root: Path | None = None) -> int:
@@ -83,7 +123,12 @@ def current_level(project_root: Path | None = None) -> int:
 
 
 def current_retry_cap(project_root: Path | None = None) -> int:
-    """Default cap is 3; settable via state or `UCW_AUTO_RETRY_CAP` env."""
+    """Retry cap for the level-2+ verify loop (default 3).
+
+    Resolution: `UCW_AUTO_RETRY_CAP` env > `retry_cap` in the auto-mode
+    state file (`on --retry-cap`) > `auto.retry_cap` setting > 3.
+    Must stay in agreement with hooks/_hook_common.auto_retry_cap().
+    """
     env = os.environ.get("UCW_AUTO_RETRY_CAP", "").strip()
     if env.isdigit():
         cap = int(env)
@@ -98,11 +143,15 @@ def current_retry_cap(project_root: Path | None = None) -> int:
                 return cap
         except (OSError, json.JSONDecodeError):
             pass
+    stored = _read_settings(project_root).get("auto.retry_cap")
+    if (isinstance(stored, int) and not isinstance(stored, bool)
+            and 0 < stored < 100):
+        return stored
     return 3
 
 
 def cmd_on(args: argparse.Namespace) -> int:
-    level = args.level if args.level is not None else DEFAULT_LEVEL_ON_BARE_ON
+    level = args.level if args.level is not None else default_on_level()
     if level not in VALID_LEVELS:
         print(json.dumps({"error": f"invalid level: {level}",
                           "valid": list(VALID_LEVELS)}), file=sys.stderr)
@@ -163,9 +212,11 @@ def main(argv: list[str] | None = None) -> int:
     p_on = sub.add_parser("on")
     p_on.add_argument("level", nargs="?", type=int, default=None,
                       help=f"auto-mode level {list(VALID_LEVELS)} "
-                           f"(default {DEFAULT_LEVEL_ON_BARE_ON})")
+                           f"(default: auto.default_level setting, "
+                           f"else {DEFAULT_LEVEL_ON_BARE_ON})")
     p_on.add_argument("--retry-cap", type=int, default=None,
-                      help="override retry cap for level 2+ (default 3)")
+                      help="override retry cap for level 2+ "
+                           "(default: auto.retry_cap setting, else 3)")
     p_on.set_defaults(func=cmd_on)
 
     p_off = sub.add_parser("off")

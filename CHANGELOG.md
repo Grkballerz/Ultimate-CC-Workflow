@@ -5,6 +5,60 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Fixed / Changed — audit-fixes wave (QW1–QW6, WP1–WP4, kimi api-error)
+
+One coordinated pass over eleven confirmed audit findings — the theme is
+"no silent green": every gate that used to skip quietly now either runs
+for real or fails loudly.
+
+- **Review lanes get receipts** (`bin/ucw-review.py`): each reviewer lane
+  records completion via `lane-done <lane>`; `gate --expect-lanes a,b,c`
+  exits 3 listing lanes with no receipt, so a reviewer subagent that died
+  silently no longer looks like a clean pass. `summary` now includes a
+  pending-disprove count.
+- **Correctness/performance/tests lanes no longer fan out across prose**:
+  `CONCERN_GLOBS` is pinned to code extensions (`SOURCE_EXTENSIONS`); the
+  docs lane alone owns markdown, so review reports don't get re-reviewed.
+- **Verify finds your tools** (`bin/ucw-verify.py`): gate runners are
+  probed in `<repo>/.venv/bin`, `venv/bin`, `node_modules/.bin`, and
+  `$UCW_HOME/venv/bin` before bare PATH — venv-only pytest/ruff installs
+  no longer read as "tool missing". `install.sh` provisions pytest + ruff
+  into `$UCW_HOME/venv` as a last-resort fallback.
+- **Strict gates**: when the workflow phase is `verify` or `land`, or
+  auto-mode level >= 2, a setup-skip (missing tool) is a gate FAILURE,
+  not a skip — nobody is left in the loop to notice otherwise.
+  `--strict/--no-strict` and `UCW_VERIFY_STRICT` override.
+- **Verify artifacts**: results always land in
+  `.ucw/state/verify-report.json`; a tree-keyed cache at
+  `.ucw/state/last-verify.json` (HEAD sha + sha256 of `git diff HEAD`)
+  skips re-runs on an unchanged tree and reports "cached PASS".
+- **Makefile honesty**: `make validate` prints a qualified
+  `green (N gates skipped)` instead of an unconditional success when
+  lint gates were skipped.
+- **Auto-mode settings** (`bin/ucw-settings.py`, `bin/ucw-auto.py`,
+  `hooks/stop.py`): new registry keys `auto.default_level` (int 1–4,
+  default 4, consulted by bare `auto on`) and `auto.retry_cap` (int,
+  default 3, consulted by the stop-hook retry loop).
+- **Dashboard status** (`dashboard/cli.py`): now shows auto-mode
+  (level / since / retries used vs cap), the review gate for current
+  HEAD, and a memory-distill block with a zero-yield streak warning.
+- **Memory recall pin quota** (`memory/ucw_memory/retrieval.py`): pinned
+  facts are capped at ceil(k/3) reserved slots so a large pin set can't
+  crowd out query-relevant hits.
+- **Distill regex fixes** (`memory/ucw_memory/distill.py`): contractions
+  survive extraction — "We're using pnpm because it's faster" now yields
+  a fact instead of being dropped.
+- **Kimi false-success fix** (`bin/kimi_invoke.py`): `claude-kimi`
+  prints auth/quota failures ("API Error: 403 ...") to stdout and exits
+  0; both modes now pattern-match these and return `ok=False,
+  error="api_error"` without burning retries on a quota error.
+- **Docs + drift guard** (`commands/ucw.md`, `agents/*.md`, README):
+  ship pipeline reordered with reviewers + verifier in one parallel
+  fan-out wave, file deliverables (`.ucw/state/review-report.md`), the
+  subagent delivery & recovery ladder, and lane-receipt usage; a
+  parametrized `tests/test_dispatch_drift.py` keeps the `/ucw` dispatch
+  table in `commands/ucw.md` honest against the installed binaries.
+
 ### Added — Kimi K3 cross-model integration (opt-in, advisory-first)
 
 UCW can now pull a second model into the loop through the `claude-kimi`

@@ -18,7 +18,16 @@ Four jobs:
 4. **Skip override**: `UCW_SKIP_AUTO_VERIFY=1` falls back to the old blocking
    behavior (useful when tests are very slow or need orchestration the hook
    can't do — e.g. docker-compose up first).
-5. **No-progress circuit breaker (level 0/1 only)**: if the SAME failure
+5. **Strict gates (auto level >= 2)**: with auto-mode driving there is no
+   human in the loop to notice a silently skipped gate, so a verify result
+   that skipped everything (no runner detected) or setup-skipped a gate
+   (tool missing) is NOT streak-clearing success — it blocks with an install
+   hint. ucw-verify.py itself fails missing-tool gates under the same
+   conditions; the checks here are belt-and-braces for older installed
+   verifiers. A passing run also records the tree-keyed cache entry
+   (.ucw/state/last-verify.json, written by ucw-verify.py), so the /ucw ship
+   that follows a passing Stop-hook verify is a cache hit.
+6. **No-progress circuit breaker (level 0/1 only)**: if the SAME failure
    repeats unchanged `UCW_VERIFY_BREAK_AFTER` times (default 3), release the
    Stop block instead of trapping the agent. A failure the diff can't fix
    (pre-existing lint, tool-version mismatch, untouched-file error) would
@@ -225,7 +234,28 @@ def main() -> int:
         f"command={result.get('command')!r} elapsed={result.get('elapsed_ms')}ms "
         f"source={result.get('source')}")
 
+    level = auto_mode_level(payload)
+    # Strict gates: with auto-mode driving (level >= 2) a skip is not success —
+    # nobody is left in the loop to notice it. (Phase verify/land also implies
+    # strict, but this hook only gates in build, so level is the trigger here.)
+    strict = level >= 2
+
     if result.get("skipped"):
+        if strict:
+            log(payload,
+                f"auto-verify skipped (no runner) under strict gates (level {level}) — blocking")
+            write_output({
+                "decision": "block",
+                "reason": (
+                    f"UCW AUTO (level {level}): verify could not run ANY gate — "
+                    f"tool missing — install or run install.sh --reinstall-deps, "
+                    f"or configure a runner (test_runner in "
+                    f".ucw/knowledge/PREFERENCES.md, a Makefile target, or "
+                    f"package.json scripts). Strict gates refuse to count a "
+                    f"skipped suite as a pass."
+                ),
+            })
+            return 0
         # No runner detected — blocking would be pointless friction. Allow Stop,
         # clear the streak, and surface the configuration hint via the log.
         # Users can fix by adding a `test_runner` line to PREFERENCES.md or a
@@ -235,7 +265,23 @@ def main() -> int:
         log(payload, "auto-verify skipped (no runner) — allowing Stop")
         return 0
 
-    level = auto_mode_level(payload)
+    if result.get("passed") and strict and result.get("setup_skipped"):
+        # Belt-and-braces: a current ucw-verify.py already FAILS missing-tool
+        # gates under strict conditions, but an older installed copy may still
+        # report them as a setup-skipped "pass". Never let that clear the
+        # streak when auto-mode is driving.
+        gates = ", ".join(result.get("setup_skipped") or [])
+        log(payload,
+            f"auto-verify setup-skipped [{gates}] under strict gates (level {level}) — blocking")
+        write_output({
+            "decision": "block",
+            "reason": (
+                f"UCW AUTO (level {level}): gate(s) [{gates}] were skipped: "
+                f"tool missing — install or run install.sh --reinstall-deps. "
+                f"Strict gates treat a missing tool as a failure, not a skip."
+            ),
+        })
+        return 0
 
     if result.get("passed"):
         # Tests pass → allow Stop. Clear streak + reset retries so we don't

@@ -35,6 +35,9 @@ def fake_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("UCW_HOME", str(tmp_path / ".claude" / "ucw"))
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / ".claude"))
+    # Gate-tool provisioning (pytest + ruff into $UCW_HOME/venv) needs the
+    # network — skip it in tests; test_verify_strict.py covers the function.
+    monkeypatch.setenv("UCW_INSTALL_GATE_TOOLS", "0")
     return tmp_path
 
 
