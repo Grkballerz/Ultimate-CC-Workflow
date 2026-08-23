@@ -50,4 +50,7 @@ Format: `YYYY-MM-DD — Decision — Because …`
 
 <!-- scribe-adr-start -->
 - 2026-08-21 — Kimi K3 wired in as advisory-only second opinion (review lane, opinion cmd, disprover route, gated implementer offload) — Because cross-vendor challenge catches what same-vendor review misses; Kimi output is never load-bearing without passing existing gates, and all Kimi spend is opt-in via /ucw settings.
+- 2026-08-23 — Gates fail loudly under strict conditions — Because a green verify that ran zero tools (missing pytest/ruff) under auto-commit was the audit's worst failure mode; strict = verify/land phase or auto-level >= 2.
+- 2026-08-23 — Review lanes emit lane-done receipts; gate --expect-lanes fails on missing lanes — Because dead reviewers were indistinguishable from a clean review (empty store passed the gate).
+- 2026-08-23 — Reviewer agents may hold Write only with audited write-scope frontmatter confined to .ucw/state/ — Because report files need writing but reviewers must not be able to tamper with reviewed sources; audit demotes to a kept-visible nit.
 <!-- scribe-adr-end -->
