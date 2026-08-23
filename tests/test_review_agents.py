@@ -145,3 +145,125 @@ def test_review_subcommand_references_all_reviewers():
     for concern in CONCERNS:
         assert f"reviewer-{concern}" in text, \
             f"commands/ucw.md doesn't reference reviewer-{concern}"
+
+
+# ---- subagents must not be told to call MCP tools they don't have -----------
+# Subagents only get the tools in their frontmatter `tools:` list. An agent
+# body that instructs "call mcp__ucw-memory__memory.init" while its frontmatter
+# grants no MCP tools is structurally impossible — the step silently never
+# happens (real bug: /ucw init left .ucw/memory.sqlite uncreated because the
+# onboarder can't reach the MCP server). The repo uses TWO spellings for these
+# tools — fully-qualified (`mcp__ucw-memory__memory.recall`) and shorthand
+# (`memory.recall(goal)`) — so the guard matches both. Mentions are allowed
+# only on lines that NEGATE the call ("you have no MCP tools — never attempt
+# ..."), hand it to the main session, or invoke the CLI binary instead
+# (matched by its path, `venv/bin/ucw-memory`, NOT the bare name — the bare
+# name is a substring of `mcp__ucw-memory__...` and would self-exempt).
+
+_MCP_REF = re.compile(r"mcp__[\w-]+__[\w.*-]+")
+_MEMORY_SHORTHAND_REF = re.compile(
+    r"\bmemory\.(recall|note|pin|forget|list|stats|init|merge|expire|distill)\b"
+)
+_NEGATION_MARKERS = (
+    "never", "no mcp", "not ", "main session", "only reachable",
+    "venv/bin/ucw-memory",
+)
+
+
+def _agent_files():
+    yield from AGENTS_DIR.glob("*.md")
+    yield from (AGENTS_DIR / "reviewers").glob("*.md")
+
+
+def test_agents_never_instructed_to_call_unavailable_mcp_tools():
+    for path in _agent_files():
+        meta = _parse_frontmatter(path)
+        tools = meta.get("tools", "")
+        if "mcp__" in tools or tools.strip() in ("*", "'*'", '"*"'):
+            continue  # agent legitimately has MCP access
+        body = path.read_text(encoding="utf-8")
+        in_fence = False
+        for i, line in enumerate(body.splitlines(), start=1):
+            if line.lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                # Fenced blocks are illustrative examples (sample output,
+                # sample findings) — not instructions to the agent. All the
+                # real bugs this guards against were prose instructions.
+                continue
+            if not (_MCP_REF.search(line) or _MEMORY_SHORTHAND_REF.search(line)):
+                continue
+            low = line.lower()
+            assert any(m in low for m in _NEGATION_MARKERS), (
+                f"{path.name}:{i} references an MCP tool but the agent's "
+                f"frontmatter grants no MCP tools — a subagent can't call it. "
+                f"Use the ucw-memory CLI via Bash, or defer to the main "
+                f"session. Line: {line.strip()!r}"
+            )
+
+
+def test_onboarder_inits_memory_via_cli():
+    """Regression: /ucw init must produce .ucw/memory.sqlite. The onboarder
+    has no MCP tools, so the init must go through the ucw-memory CLI."""
+    body = (AGENTS_DIR / "onboarder.md").read_text(encoding="utf-8")
+    assert "ucw-memory" in body and "init" in body
+    assert "by calling `mcp__ucw-memory__memory.init`" not in body
+
+
+def test_repo_oracle_recalls_memory_via_cli():
+    body = (AGENTS_DIR / "repo-oracle.md").read_text(encoding="utf-8")
+    assert "ucw-memory" in body and "recall" in body
+
+
+# ---- Kimi cross-model lanes are documented as OPT-IN -------------------------
+# The Kimi second-opinion review lane and the Kimi disprover route both cost
+# separate tokens and add latency — they must be documented as opt-in flags,
+# and the stock disprover subagent must stay on haiku (cross-audit invariant).
+
+def _ucw_md() -> str:
+    return (REPO_ROOT / "commands" / "ucw.md").read_text(encoding="utf-8")
+
+
+def test_review_documents_with_kimi_lane_as_opt_in():
+    """--with-kimi adds the kimi-second-opinion lane, and it's opt-in."""
+    text = _ucw_md()
+    assert "--with-kimi" in text, \
+        "commands/ucw.md must document the --with-kimi review flag"
+    assert "kimi-second-opinion" in text, \
+        "commands/ucw.md must name the kimi-second-opinion lane"
+    assert "ucw-kimi-opinion.py" in text, \
+        "commands/ucw.md must reference bin/ucw-kimi-opinion.py"
+    assert re.search(r"opt-in|default off|default: off", text, re.IGNORECASE), \
+        "the Kimi review lane must be documented as opt-in / default off"
+
+
+def test_review_documents_with_kimi_settings_fallback():
+    """Absent the flag, kimi.review from ucw-settings decides."""
+    text = _ucw_md()
+    assert "kimi.review" in text
+
+
+def test_review_documents_disprover_model_kimi_as_opt_in():
+    """--disprover-model kimi routes disprove through the bridge; haiku default."""
+    text = _ucw_md()
+    assert "--disprover-model" in text, \
+        "commands/ucw.md must document the --disprover-model review flag"
+    assert "ucw-kimi-disprove.py" in text, \
+        "commands/ucw.md must reference bin/ucw-kimi-disprove.py"
+    assert "kimi.disprover" in text, \
+        "absent the flag, kimi.disprover from ucw-settings decides"
+    # The default stays the haiku disprover subagent, stated near the flag
+    # documentation (rindex: the first occurrence is the section heading).
+    flag_idx = text.rindex("--disprover-model")
+    window = text[flag_idx:flag_idx + 1500]
+    assert "haiku" in window and "default" in window.lower(), \
+        "the haiku disprover subagent must be documented as the default route"
+
+
+def test_disprover_frontmatter_model_is_still_haiku():
+    """The Kimi disprover ROUTE must not change the stock agent's model."""
+    meta = _parse_frontmatter(AGENTS_DIR / "disprover.md")
+    assert meta.get("model") == "haiku", \
+        "agents/disprover.md must keep model: haiku — the Kimi route is a " \
+        "separate opt-in path, not a change to the subagent"

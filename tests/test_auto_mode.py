@@ -19,6 +19,7 @@ BIN = REPO_ROOT / "bin" / "ucw-auto.py"
 # Import the module directly for in-process tests of the helper functions
 sys.path.insert(0, str(REPO_ROOT / "bin"))
 import importlib.util
+
 _spec = importlib.util.spec_from_file_location("ucw_auto", BIN)
 ucw_auto = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ucw_auto)
@@ -72,7 +73,7 @@ def test_on_invalid_level_rejected(project):
 
 def test_on_then_off_clears_state(project):
     _run(["on", "3"], cwd=project)
-    rc, out, _ = _run(["off"], cwd=project)
+    _rc, out, _ = _run(["off"], cwd=project)
     body = json.loads(out)
     assert body["auto_mode"] == "off"
     assert body["cleared"] is True
@@ -88,7 +89,7 @@ def test_off_when_already_off_is_idempotent(project):
 
 
 def test_status_when_off(project):
-    rc, out, _ = _run(["status"], cwd=project)
+    _rc, out, _ = _run(["status"], cwd=project)
     body = json.loads(out)
     assert body["auto_mode"] == "off"
     assert body["level"] == 0
@@ -96,7 +97,7 @@ def test_status_when_off(project):
 
 def test_status_when_on(project):
     _run(["on", "2"], cwd=project)
-    rc, out, _ = _run(["status"], cwd=project)
+    _rc, out, _ = _run(["status"], cwd=project)
     body = json.loads(out)
     assert body["auto_mode"] == "on"
     assert body["level"] == 2
@@ -112,7 +113,7 @@ def test_level_subcommand_prints_integer(project):
 
 
 def test_level_when_off_is_zero(project):
-    rc, out, _ = _run(["level"], cwd=project)
+    _rc, out, _ = _run(["level"], cwd=project)
     assert out.strip() == "0"
 
 
@@ -127,14 +128,14 @@ def test_retry_cap_override(project):
 
 def test_retry_cap_env_var_wins(project):
     _run(["on", "2", "--retry-cap", "5"], cwd=project)
-    rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_RETRY_CAP": "7"})
+    _rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_RETRY_CAP": "7"})
     body = json.loads(out)
     assert body["retry_cap"] == 7
 
 
 def test_retry_cap_invalid_env_falls_back_to_state(project):
     _run(["on", "2", "--retry-cap", "5"], cwd=project)
-    rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_RETRY_CAP": "abc"})
+    _rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_RETRY_CAP": "abc"})
     body = json.loads(out)
     assert body["retry_cap"] == 5
 
@@ -146,14 +147,14 @@ def test_env_var_off_wins_over_state(project):
     This is the panic-button: if the agent goes wrong, the user can disable
     in one shell without finding the right state file."""
     _run(["on", "4"], cwd=project)
-    rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_MODE": "off"})
+    _rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_MODE": "off"})
     body = json.loads(out)
     assert body["auto_mode"] == "off"
     assert body["level"] == 0
 
 
 def test_env_var_on_sets_level_4(project):
-    rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_MODE": "on"})
+    _rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_MODE": "on"})
     body = json.loads(out)
     assert body["auto_mode"] == "on"
     assert body["level"] == 4
@@ -161,13 +162,13 @@ def test_env_var_on_sets_level_4(project):
 
 
 def test_env_var_explicit_level(project):
-    rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_MODE": "3"})
+    _rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_MODE": "3"})
     assert json.loads(out)["level"] == 3
 
 
 def test_env_var_invalid_level_falls_back_to_state(project):
     _run(["on", "2"], cwd=project)
-    rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_MODE": "99"})
+    _rc, out, _ = _run(["status"], cwd=project, env_extra={"UCW_AUTO_MODE": "99"})
     # Invalid env value → fall through to state
     assert json.loads(out)["level"] == 2
 

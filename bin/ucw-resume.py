@@ -149,7 +149,6 @@ def render(repo: Path, *, plan_bytes: int = 3000, spec_bytes: int = 1500) -> str
         if head_branch and head_branch != "HEAD":
             git_lines.append(f"- **Branch**: `{head_branch}`")
         if dirty_count:
-            warn_emoji = ""  # plain text — no emojis per project policy
             warn = f"- **Dirty tree**: {dirty_count} file(s) with uncommitted changes"
             if level >= 3 and phase == "land":
                 warn += (

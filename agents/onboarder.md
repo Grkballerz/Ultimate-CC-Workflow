@@ -78,7 +78,14 @@ $HOME/.claude/ucw/bin/ucw-render-knowledge.py \
 
 That writes all 7 Knowledge files. Finally:
 
-1. Initialize `.ucw/memory.sqlite` by calling `mcp__ucw-memory__memory.init`.
+1. Initialize `.ucw/memory.sqlite` by running the memory CLI from the project
+   root (you have no MCP tools — never attempt `mcp__ucw-memory__*` calls):
+   ```
+   "$HOME/.claude/ucw/venv/bin/ucw-memory" init
+   ```
+   It infers `.ucw/memory.sqlite` from the cwd and prints `{"ok": true, ...}`.
+   If the binary doesn't exist, skip this step and say so in your final
+   summary — the main session will init memory itself (it has the MCP tool).
 2. If user opted into Obsidian/Notion: register the MCP server with `claude mcp add <name> --scope user -- <command…>` (or, if the CLI is unavailable, merge into `~/.claude.json` — the user-scope file Claude Code actually loads; **never** `~/.claude/mcp.json`, which Claude Code does not read).
 3. Print a one-paragraph "here's what I know about your repo" summary for verification.
 
@@ -92,4 +99,4 @@ instead of overwriting. Ask only for missing or explicitly-requested categories
 
 - **Edit/Write**: restricted to `.ucw/knowledge/*`, `~/.claude.json`
 - **Read/Glob/Grep**: anywhere
-- **Bash**: `git remote -v`, probing version commands, and `claude mcp add` for optional Obsidian/Notion servers
+- **Bash**: `git remote -v`, probing version commands, `"$HOME/.claude/ucw/venv/bin/ucw-memory" init`, and `claude mcp add` for optional Obsidian/Notion servers

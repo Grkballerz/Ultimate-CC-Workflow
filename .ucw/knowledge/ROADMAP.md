@@ -4,6 +4,24 @@
 
 ## Done
 <!-- scribe-done-start -->
+### Kimi K3 second-opinion integration (landed 2026-08-21, da9948f)
+- [x] bin/kimi_invoke.py — subprocess wrapper around `claude-kimi -p` (JSON parse, 1 retry, 90s timeout, {ok,data,raw,error}, never raises)
+- [x] tests/test_kimi_invoke.py — mocked subprocess: timeout, malformed JSON, happy path
+- [x] bin/ucw-kimi-opinion.py — diff→Kimi review prompt→Finding dicts→ucw-review.py add-finding (finder_agent=kimi-second-opinion, finder_model=kimi-k3)
+- [x] tests/test_kimi_review_lane.py — malformed→0 findings+warning; well-formed→correct add-finding args
+- [x] commands/ucw.md review section — document --with-kimi as 10th parallel lane, default off
+- [x] tests/test_review_agents.py — extend: --with-kimi documented; existing assertions unchanged
+- [x] commands/ucw.md — new `opinion <question|--diff>` section, advisory banner, read-only
+- [x] tests/test_opinion_command.py — dispatch-table + advisory-text assertions
+- [x] bin/ucw-kimi-disprove.py — disprover prompt via kimi_invoke → ucw-review.py disprove --agent kimi-disprover --model kimi-k3
+- [x] commands/ucw.md — opt-in --disprover-model kimi flag; default haiku unchanged
+- [x] tests/test_review_agents.py — extend: disprover.md model still haiku; flag documented opt-in
+- [x] bin/ucw-kimi-implement.py — claude-kimi -p with --allowedTools Read,Edit,Write,Grep,Glob (NO Bash), never commits
+- [x] agents/implementer.md + commands/ucw.md plan section — [kimi] task tag rules + mandatory verify gate
+- [x] tests/test_kimi_implementer_offload.py — docs mention tag+verify rule; allowed-tools excludes Bash
+- [x] make validate green + CHANGELOG.md entry
+- [x] bin/ucw-settings.py — list/get/set/unset over .ucw/state/settings.json; typed registry (kimi.review, kimi.disprover, kimi.offload, kimi.model, kimi.timeout_secs, review.default, ship.push, ship.pr, scribe.auto); precedence env UCW_<KEY> > project > default; + tests/test_settings_cli.py
+- [x] commands/ucw.md settings section + dispatch row; kimi flags consult settings when absent; [kimi] tags honored only when kimi.offload=true (auto-mode kill-switch); + tests/test_settings_command.py
 <!-- scribe-done-end -->
 
 ## In progress
