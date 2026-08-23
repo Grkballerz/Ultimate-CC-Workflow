@@ -80,10 +80,11 @@ def aggregate(db: MemoryDB, *, scope: str = "project") -> list[dict]:
     for (predicate, token), members in groups.items():
         sessions = {m.source_session for m in members if m.source_session}
         uses = len(members)
-        # Confidence = (uses across distinct sessions) / (total uses), boosted
-        # by sample size via a smoothed prior: (s + 1) / (n + 2). Bounded [0,1].
+        # Confidence grows with evidence: a session-diversity factor and a
+        # sample-size factor, each saturating toward 1.0. The old formula
+        # ((s + 1) / (n + 2)) was inverted — MORE uses LOWERED confidence.
         session_count = max(len(sessions), 1)
-        confidence = (session_count + 1) / (uses + 2)
+        confidence = (session_count / (session_count + 1)) * (uses / (uses + 1))
         # Build human-friendly pattern/trigger from the members
         sample = members[0]
         out.append({

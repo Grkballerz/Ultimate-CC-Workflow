@@ -41,18 +41,22 @@ agents for that.
 
 ## Output
 
-**Exactly one JSON object on stdout**, nothing else:
+Record your verdict through the CLI — the CLI call IS the deliverable.
+The gate reads the persisted record, never your prose:
 
 ```
-{"verdict": "refuted|confirmed|needs-human", "evidence": "<2-4 sentences of concrete reasoning, citing file:line>"}
+ucw-review.py disprove <finding-id> <verdict> --evidence "<2-4 sentences of concrete reasoning, citing file:line>" --agent disprover --model haiku
 ```
 
-Then call:
-```
-ucw-review.py disprove <finding-id> <verdict> --evidence "<your text>" --agent disprover --model haiku
-```
+The CLI persists the verdict and recomputes the finding's effective
+severity. Do not print a separate JSON verdict object — the persisted
+record is the single source of truth; your reply is at most a one-line
+pointer (`disproved <id>: <verdict>`).
 
-## Examples
+## Examples of verdict + evidence content
+
+Each example shows the `<verdict>` and `--evidence` text you'd pass to
+the CLI:
 
 **Refuted:**
 ```json
@@ -74,4 +78,6 @@ ucw-review.py disprove <finding-id> <verdict> --evidence "<your text>" --agent d
 - Generate a NEW finding (different file, different bug). Not your role.
 - Say "looks fine to me" without citing specific evidence.
 - Refute without reading the file. Always Read first.
-- Output anything except the JSON line + the CLI call.
+- Skip the CLI call. A verdict that isn't recorded via
+  `ucw-review.py disprove` never happened — the gate only sees the
+  persisted record.

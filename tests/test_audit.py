@@ -74,6 +74,54 @@ model: opus
     assert audit.scan_agent_scopes(agent) == []
 
 
+def _agent_md(tools, extra_front=""):
+    return f"""\
+---
+name: reviewer
+tools: [{tools}]
+{extra_front}model: opus
+---
+# Reviewer body
+"""
+
+
+def test_confined_write_scope_demotes_to_nit(tmp_path):
+    audit = _load_audit()
+    agent = tmp_path / "reviewer.md"
+    agent.write_text(_agent_md(
+        "Read, Grep, Glob, Write",
+        "write-scope: .ucw/state/review-report.md\n"))
+    findings = audit.scan_agent_scopes(agent)
+    assert [f.severity for f in findings if f.rule == "review_agent_writes"] == ["nit"]
+
+
+def test_write_scope_outside_ucw_state_stays_major(tmp_path):
+    audit = _load_audit()
+    agent = tmp_path / "reviewer.md"
+    agent.write_text(_agent_md(
+        "Read, Write", "write-scope: src/report.md\n"))
+    findings = audit.scan_agent_scopes(agent)
+    assert [f.severity for f in findings if f.rule == "review_agent_writes"] == ["major"]
+
+
+def test_write_scope_with_traversal_stays_major(tmp_path):
+    audit = _load_audit()
+    agent = tmp_path / "reviewer.md"
+    agent.write_text(_agent_md(
+        "Read, Write", "write-scope: .ucw/state/../../src/x.md\n"))
+    findings = audit.scan_agent_scopes(agent)
+    assert [f.severity for f in findings if f.rule == "review_agent_writes"] == ["major"]
+
+
+def test_edit_tool_never_demotable_despite_write_scope(tmp_path):
+    audit = _load_audit()
+    agent = tmp_path / "reviewer.md"
+    agent.write_text(_agent_md(
+        "Read, Edit, Write", "write-scope: .ucw/state/review-report.md\n"))
+    findings = audit.scan_agent_scopes(agent)
+    assert [f.severity for f in findings if f.rule == "review_agent_writes"] == ["major"]
+
+
 def test_audit_clean_repo_returns_zero(tmp_path):
     audit = _load_audit()
     # Empty tree — no findings.

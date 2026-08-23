@@ -51,8 +51,14 @@ ucw-review.py add-finding --json '{
 
 The CLI will assign an id and persist the finding. Do not pre-assign ids.
 
-If you find nothing, emit nothing and exit cleanly. Silence is a valid
-result and means "I looked and saw nothing in scope."
+If you find nothing, add no findings. Silence is a valid result and
+means "I looked and saw nothing in scope" — but you must STILL record
+your lane receipt (Closing step below) so the gate can prove you ran.
+
+## Closing step (mandatory)
+
+Findings or none, ALWAYS finish with `ucw-review.py lane-done data-loss` — the
+receipt is how `gate --expect-lanes` tells a clean lane from one that died.
 
 ## What you must never do
 

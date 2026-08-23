@@ -260,6 +260,50 @@ install_memory_deps() {
   warn "manually: python3 -m venv $UCW_HOME/venv && $UCW_HOME/venv/bin/pip install -e $REPO_ROOT/memory"
 }
 
+install_gate_tools() {
+  # Verification gates need a fallback interpreter: bin/ucw-verify.py probes
+  # $UCW_HOME/venv/bin right after the project's own venvs, so pytest + ruff
+  # living there means `pytest` / `ruff check` gates never setup-skip just
+  # because the host machine is bare. Idempotent: reuses the venv that
+  # install_memory_deps made (or creates one if the direct-pip path was
+  # taken) and skips the install when both tools are already present.
+  # UCW_INSTALL_GATE_TOOLS=0 skips entirely (offline installs, CI).
+  if [[ "${UCW_INSTALL_GATE_TOOLS:-1}" == "0" ]]; then
+    debug "UCW_INSTALL_GATE_TOOLS=0 — skipping gate tools (pytest, ruff)"
+    return
+  fi
+  if (( DRY_RUN )); then
+    log "[DRY] would install gate tools (pytest + ruff) into $UCW_HOME/venv"
+    return
+  fi
+
+  local py="$UCW_HOME/venv/bin/python"
+  if [[ ! -x "$py" ]]; then
+    # install_memory_deps took the direct-pip path (no PEP 668 venv) — create
+    # the fallback venv anyway so gates always have an interpreter.
+    if ! python3 -m venv "$UCW_HOME/venv" 2>/dev/null; then
+      warn "could not create $UCW_HOME/venv — gate tools (pytest, ruff) not installed"
+      return
+    fi
+  fi
+
+  if "$py" -c "import pytest" 2>/dev/null && [[ -x "$UCW_HOME/venv/bin/ruff" ]]; then
+    debug "gate tools already present in $UCW_HOME/venv (pytest + ruff)"
+    return
+  fi
+
+  # uv first (also covers uv-created venvs, which ship without pip).
+  if command -v uv >/dev/null 2>&1 && \
+     uv pip install --quiet --python "$py" pytest ruff 2>/dev/null; then
+    log "installed gate tools (pytest + ruff) into $UCW_HOME/venv"
+  elif "$py" -m pip install --quiet pytest ruff 2>/dev/null; then
+    log "installed gate tools (pytest + ruff) into $UCW_HOME/venv"
+  else
+    warn "could not install pytest + ruff into $UCW_HOME/venv — verify gates may setup-skip"
+    warn "retry manually: $UCW_HOME/venv/bin/pip install pytest ruff"
+  fi
+}
+
 _python_is_externally_managed() {
   # PEP 668: distros mark the stdlib path with an EXTERNALLY-MANAGED file.
   # https://peps.python.org/pep-0668/
@@ -453,6 +497,8 @@ case "$PROFILE" in
     [[ "$PROFILE" != "minimal" ]] && install_hooks
     [[ "$PROFILE" != "minimal" ]] && install_skills
     install_memory_deps
+    # Gates (verification hooks) ship in standard/full — minimal stays lean.
+    [[ "$PROFILE" != "minimal" ]] && install_gate_tools
     register_mcp
     apply_profile "$PROFILE"
     verify_install

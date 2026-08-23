@@ -75,6 +75,30 @@ def test_scope_persists_with_flag(repo, capsys):
     assert (sha_dirs[0] / "scope.json").exists()
 
 
+def test_scope_persist_prints_compact_summary(repo, capsys):
+    """--persist keeps the full scope list in the file, not on stdout."""
+    mod = _load()
+    rc = mod.main(["scope", "--repo", str(repo), "--persist"])
+    body = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "scopes" not in body  # full JSON stays in the persisted file
+    assert body["scope_count"] > 0
+    assert body["file_count"] > 0
+    assert sum(body["lanes"].values()) == body["scope_count"]
+    persisted = Path(body["persisted"])
+    assert persisted.exists()
+    on_disk = json.loads(persisted.read_text(encoding="utf-8"))
+    assert len(on_disk["scopes"]) == body["scope_count"]
+
+
+def test_scope_without_persist_still_dumps_full_scopes(repo, capsys):
+    mod = _load()
+    mod.main(["scope", "--repo", str(repo)])
+    body = json.loads(capsys.readouterr().out)
+    assert body["scopes"]
+    assert "persisted" not in body
+
+
 def test_scope_steps_back_when_on_main(repo, capsys):
     """If current HEAD == main, fall back to HEAD~1 so diff isn't empty."""
     mod = _load()
@@ -88,6 +112,41 @@ def test_scope_with_explicit_since(repo, capsys):
     mod.main(["scope", "--repo", str(repo), "--since", "HEAD~1"])
     body = json.loads(capsys.readouterr().out)
     assert body["scope_count"] > 0
+
+
+# ---- concern globs ----------------------------------------------------------
+
+def test_code_lanes_exclude_markdown():
+    """correctness/performance/tests must not fan out over review markdown."""
+    mod = _load()
+    for lane in ("correctness", "performance", "tests"):
+        globs = mod.CONCERN_GLOBS[lane]
+        assert not any(mod._glob_matches(g, "docs/review-report.md") for g in globs)
+        assert not any(mod._glob_matches(g, "README.md") for g in globs)
+        assert not any(mod._glob_matches(g, ".ucw/state/review-report.md") for g in globs)
+        # but real source still matches
+        assert any(mod._glob_matches(g, "src/a.py") for g in globs)
+        assert any(mod._glob_matches(g, "web/app.tsx") for g in globs)
+        assert any(mod._glob_matches(g, "scripts/deploy.sh") for g in globs)
+
+
+def test_docs_lane_keeps_markdown():
+    mod = _load()
+    globs = mod.CONCERN_GLOBS["docs"]
+    assert any(mod._glob_matches(g, "notes/review-report.md") for g in globs)
+    assert any(mod._glob_matches(g, "README.md") for g in globs)
+
+
+def test_scope_routes_markdown_to_docs_lane_only(repo, capsys):
+    """End-to-end: a changed .md file lands in docs, not the code lanes."""
+    (repo / "notes.md").write_text("# notes\n")
+    _git("add", ".", cwd=repo)
+    _git("commit", "-qm", "add notes", cwd=repo)
+    mod = _load()
+    mod.main(["scope", "--repo", str(repo)])
+    body = json.loads(capsys.readouterr().out)
+    concerns = {s["concern"] for s in body["scopes"] if s["file"] == "notes.md"}
+    assert concerns == {"docs"}
 
 
 # ---- add-finding ------------------------------------------------------------
@@ -233,6 +292,74 @@ def test_gate_json_output(repo, capsys):
     assert "by_severity" in body
 
 
+# ---- lane receipts ----------------------------------------------------------
+
+def test_lane_done_writes_receipt_under_review_dir(repo, capsys):
+    mod = _load()
+    rc = mod.main(["lane-done", "correctness", "--repo", str(repo)])
+    body = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert body["lane"] == "correctness"
+    assert body["sha"]
+    sha_dirs = list((repo / ".ucw" / "reviews").iterdir())
+    assert len(sha_dirs) == 1
+    receipts = (sha_dirs[0] / "lane-receipts.jsonl").read_text()
+    assert json.loads(receipts.splitlines()[0])["lane"] == "correctness"
+
+
+def test_gate_expect_lanes_all_done_exits_0(repo, capsys):
+    mod = _load()
+    for lane in ("correctness", "injection"):
+        mod.main(["lane-done", lane, "--repo", str(repo)])
+        capsys.readouterr()
+    rc = mod.main(["gate", "--repo", str(repo), "--expect-lanes", "correctness,injection"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "2 expected lane(s) reported done" in out
+
+
+def test_gate_expect_lanes_missing_exits_3_and_names_them(repo, capsys):
+    mod = _load()
+    mod.main(["lane-done", "correctness", "--repo", str(repo)])
+    capsys.readouterr()
+    rc = mod.main(["gate", "--repo", str(repo),
+                   "--expect-lanes", "correctness,injection,tests", "--json"])
+    body = json.loads(capsys.readouterr().out)
+    assert rc == 3
+    assert body["missing_lanes"] == ["injection", "tests"]
+
+
+def test_gate_expect_lanes_empty_store_fails(repo, capsys):
+    """Zero receipts + zero findings must NOT look clean — dead reviewers."""
+    mod = _load()
+    rc = mod.main(["gate", "--repo", str(repo), "--expect-lanes", "correctness,injection"])
+    out = capsys.readouterr().out
+    assert rc == 3
+    assert "correctness" in out
+    assert "injection" in out
+
+
+def test_gate_unack_critical_outranks_missing_lanes(repo, capsys):
+    mod = _load()
+    mod.main(["add-finding", "--repo", str(repo), "--json", json.dumps({
+        "severity": "critical", "category": "injection",
+        "file": "x", "line": 1, "title": "t", "detail": "d",
+    })])
+    capsys.readouterr()
+    rc = mod.main(["gate", "--repo", str(repo), "--expect-lanes", "correctness"])
+    capsys.readouterr()
+    assert rc == 2
+
+
+def test_gate_without_expect_lanes_ignores_receipts(repo, capsys):
+    """No --expect-lanes → receipts play no part (back-compat)."""
+    mod = _load()
+    rc = mod.main(["gate", "--repo", str(repo), "--json"])
+    body = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert "missing_lanes" not in body
+
+
 # ---- approve ----------------------------------------------------------------
 
 def test_approve_clears_gate(repo, capsys):
@@ -289,6 +416,29 @@ def test_summary_json(repo, capsys):
     body = json.loads(capsys.readouterr().out)
     assert "findings" in body
     assert "gate" in body
+    assert body["pending_disprove"] == 0
+
+
+def test_summary_counts_pending_disprove(repo, capsys):
+    """Findings without a disprover verdict are surfaced as pending."""
+    mod = _load()
+    fids = []
+    for i in range(2):
+        mod.main(["add-finding", "--repo", str(repo), "--json", json.dumps({
+            "severity": "major", "category": "correctness",
+            "file": "src/a.py", "line": i + 1, "title": f"t{i}", "detail": "d",
+        })])
+        fids.append(json.loads(capsys.readouterr().out)["id"])
+    mod.main(["disprove", "--repo", str(repo), fids[0], "confirmed"])
+    capsys.readouterr()
+
+    mod.main(["summary", "--repo", str(repo), "--format", "json"])
+    body = json.loads(capsys.readouterr().out)
+    assert body["pending_disprove"] == 1
+
+    mod.main(["summary", "--repo", str(repo)])
+    out = capsys.readouterr().out
+    assert "Pending disprove:** 1" in out
 
 
 def test_list_empty(repo, capsys):

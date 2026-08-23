@@ -93,7 +93,13 @@ def auto_mode_level(payload: dict[str, Any]) -> int:
 
 
 def auto_retry_cap(payload: dict[str, Any]) -> int:
-    """Return the retry cap (default 3). Used by Stop hook at level >= 2."""
+    """Return the retry cap (default 3). Used by Stop hook at level >= 2.
+
+    Resolution order: UCW_AUTO_RETRY_CAP env → `retry_cap` in
+    .ucw/state/auto-mode (`on --retry-cap`) → `auto.retry_cap` in
+    .ucw/state/settings.json → 3. Must stay in agreement with
+    bin/ucw-auto.py current_retry_cap().
+    """
     env = os.environ.get("UCW_AUTO_RETRY_CAP", "").strip()
     if env.isdigit():
         cap = int(env)
@@ -106,6 +112,16 @@ def auto_retry_cap(payload: dict[str, Any]) -> int:
             data = json.loads(sf.read_text(encoding="utf-8"))
             cap = data.get("retry_cap")
             if isinstance(cap, int) and 0 < cap < 100:
+                return cap
+        except (OSError, ValueError):
+            pass
+    settings = state_file(payload, "settings.json")
+    if settings.exists():
+        try:
+            import json
+            data = json.loads(settings.read_text(encoding="utf-8"))
+            cap = data.get("auto.retry_cap") if isinstance(data, dict) else None
+            if isinstance(cap, int) and not isinstance(cap, bool) and 0 < cap < 100:
                 return cap
         except (OSError, ValueError):
             pass

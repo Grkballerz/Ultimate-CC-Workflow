@@ -2,20 +2,26 @@
 """UserPromptSubmit hook — inject relevant Knowledge docs based on prompt content
 plus a resume hint when UCW workflow state is set.
 
-Two injection channels into `additionalContext`:
+Three injection channels into `additionalContext`:
 
 1. **Knowledge** (existing): cheap keyword match → `.ucw/knowledge/*.md`.
 2. **Resume hint** (PR D): if `.ucw/state/phase` exists, prepend a small
    block naming the phase, auto-mode level, and pointers to plan.md / spec.md
    so the agent re-orients after `/clear` or `/compact` without manual
    `/ucw status` + `cat`.
+3. **Pinned facts** (QW4): `memory.pin` promises "always in SessionStart",
+   but SessionStart can't inject context (strict schema rejects it) — so the
+   first prompt of each session carries a compact, budget-capped pinned-facts
+   block instead. Session detection reuses the `last-session-start` marker
+   written by hooks/session-start.py.
 
-Both fit in `hookSpecificOutput.additionalContext` which IS valid for
+All fit in `hookSpecificOutput.additionalContext` which IS valid for
 UserPromptSubmit per Claude Code's strict hook schema.
 """
 from __future__ import annotations
 
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -42,6 +48,106 @@ KEYWORD_TO_DOC: list[tuple[re.Pattern[str], str]] = [
 
 def _knowledge_dir(payload: dict) -> Path:
     return project_root(payload) / ".ucw" / "knowledge"
+
+
+# ---- pinned-facts block (QW4) ----------------------------------------------
+
+_PINNED_BUDGET = 600
+_PINNED_MARKER = "pinned-injected"
+
+
+def _memory_db_path(payload: dict) -> Path:
+    return project_root(payload) / ".ucw" / "memory.sqlite"
+
+
+def _session_token(payload: dict) -> str:
+    """Identity of the current session: payload session_id, else the content
+    of the `last-session-start` marker session-start.py writes."""
+    sid = payload.get("session_id")
+    if isinstance(sid, str) and sid.strip():
+        return sid.strip()
+    try:
+        return state_file(payload, "last-session-start").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _is_first_prompt_of_session(payload: dict) -> bool:
+    """True on the first prompt of a session; refreshes the marker.
+
+    Compares the session token against `.ucw/state/pinned-injected` from the
+    last injection. With no token at all (no session_id, no session-start
+    marker), fall back to mtime: inject when our marker is missing or older
+    than `last-session-start`, then refresh it.
+    """
+    marker = state_file(payload, _PINNED_MARKER)
+    token = _session_token(payload)
+    if token:
+        try:
+            if marker.exists() and marker.read_text(encoding="utf-8").strip() == token:
+                return False
+        except OSError:
+            pass
+    else:
+        lss = state_file(payload, "last-session-start")
+        try:
+            if marker.exists() and (
+                not lss.exists() or marker.stat().st_mtime >= lss.stat().st_mtime
+            ):
+                return False
+        except OSError:
+            return False
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(token, encoding="utf-8")
+    except OSError:
+        pass
+    return True
+
+
+def _pinned_fact_lines(db_path: Path, limit: int = 20) -> list[str]:
+    """Read pinned facts (most recent first) straight from the memory DB.
+
+    Direct sqlite3 keeps the hook self-contained — no ucw_memory import."""
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                """SELECT subject, predicate, object, reason FROM facts
+                    WHERE deleted = 0 AND pinned = 1
+                    ORDER BY created_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    return [f"- {s} {p} {o} (because {r})" for s, p, o, r in rows]
+
+
+def _build_pinned_block(payload: dict) -> str | None:
+    """Compact pinned-facts block, injected on the FIRST prompt of a session
+    only, and only when the memory DB exists. Budget-capped at ~600 chars,
+    most recent pins first."""
+    db_path = _memory_db_path(payload)
+    if not db_path.exists():
+        return None
+    if not _is_first_prompt_of_session(payload):
+        return None
+    lines = _pinned_fact_lines(db_path)
+    if not lines:
+        return None
+    header = "## UCW Memory (pinned)"
+    out = [header]
+    used = len(header)
+    for line in lines:
+        if used + len(line) + 1 > _PINNED_BUDGET:
+            break
+        out.append(line)
+        used += len(line) + 1
+    if len(out) == 1:
+        return None
+    return "\n".join(out)
 
 
 def _build_resume_hint(payload: dict) -> str | None:
@@ -104,6 +210,12 @@ def main() -> int:
     resume_hint = _build_resume_hint(payload)
     if resume_hint:
         sections.append(resume_hint)
+
+    # Pinned facts on the first prompt of a session (QW4 delivery channel).
+    pinned_block = _build_pinned_block(payload)
+    if pinned_block:
+        sections.append(pinned_block)
+        log(payload, "injected pinned memory block (first prompt of session)")
 
     docs_dir = _knowledge_dir(payload)
     if docs_dir.is_dir():
