@@ -31,6 +31,9 @@
 - [x] E. bin/kimi_invoke.py: API-error-pattern detection in raw mode (quota 403 exits 0 bug)
 - [x] F. commands/ucw.md + agents/*.md + README + drift test: pipeline reorder, ship file-deliverables + parallel gatekeepers + skip-redundant-review, nudge/recovery ladder, lane receipts docs, README sync + parametrized dispatch-drift test (QW1/2/5/6 + WP2/4 docs)
 - [x] G. Full validate + CHANGELOG + per-fix spot verification
+
+### Kimi transport fallback (landed 2026-08-27, 5feacb5)
+- [x] bin/kimi_invoke.py — `kimi.transport` setting (auto | claude-kimi | kimi-cli); auto falls back from claude-kimi to the standalone kimi CLI on timeout/api_error, tool-less calls only, no fallback in reverse
 <!-- scribe-done-end -->
 
 ## In progress

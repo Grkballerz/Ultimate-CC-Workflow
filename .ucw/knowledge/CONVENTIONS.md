@@ -31,6 +31,9 @@
   missing tool is a setup-skip; in verify/land phase or at auto-level >= 2,
   the same missing tool is a gate FAILURE — nobody is left in the loop to
   notice a silently skipped gate (see `bin/ucw-verify.py: strict_gates`).
+- transport fallbacks between external-model paths must be conservative —
+  only for tool-less calls, never silently crossing into a weaker
+  permission model.
 
 ## Logging
 - _to be filled in_
