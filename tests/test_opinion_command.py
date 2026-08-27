@@ -88,6 +88,26 @@ def test_opinion_documents_stdin_diff_pattern():
         "the opinion section must document `git diff | kimi_invoke.py - --raw`"
 
 
+# ---- transport fallback note --------------------------------------------------
+
+def test_opinion_documents_cli_fallback():
+    """The bridge auto-falls-back to the standalone kimi CLI when the
+    API-key path times out or hits quota — tool-less calls like opinion
+    are exactly the ones eligible, so the section must say so."""
+    section = _section("opinion")
+    low = section.lower()
+    assert re.search(r"falls?[ -]back|fallback", low), \
+        "the opinion section must note the auto-fallback to the kimi CLI"
+    assert "standalone" in low and "kimi" in low, \
+        "the fallback note must name the standalone kimi CLI"
+    assert "timeout" in low or "times out" in low, \
+        "the fallback note must name the timeout trigger"
+    assert "quota" in low, \
+        "the fallback note must name the quota trigger"
+    assert "kimi.transport" in section, \
+        "the fallback note must point at the kimi.transport setting"
+
+
 # ---- read-only: never instructs writes to .ucw/state -------------------------
 # The section may (and should) MENTION .ucw/state — but only to negate it
 # ("never touches .ucw/state"), mirroring the `ask` section's framing.

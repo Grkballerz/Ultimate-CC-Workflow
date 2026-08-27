@@ -127,6 +127,36 @@ def test_kimi_timeout_secs_documented_as_300():
         f"kimi.timeout_secs table row must show default 300: {row!r}"
 
 
+def test_kimi_transport_documented_as_default_auto_with_all_choices():
+    """The transport chain (auto > claude-kimi > kimi-cli) must be in both
+    registry and doc — default auto, every choice named in the table row."""
+    mod = _load_settings()
+    spec = mod.REGISTRY["kimi.transport"]
+    assert spec.default == "auto", \
+        "registry default for kimi.transport changed — update the doc AND this test"
+    assert set(spec.choices or ()) == {"auto", "claude-kimi", "kimi-cli"}, \
+        "kimi.transport choices changed — update the doc AND this test"
+    section = _settings_section()
+    row = next(ln for ln in section.splitlines()
+               if "kimi.transport" in ln and ln.lstrip().startswith("|"))
+    for choice in spec.choices:
+        assert choice in row, \
+            f"kimi.transport table row must list choice {choice!r}: {row!r}"
+    assert "auto" in row, \
+        f"kimi.transport table row must show default auto: {row!r}"
+
+
+def test_kimi_transport_row_names_tool_less_fallback_constraint():
+    """The row must state the fallback is restricted to tool-less calls —
+    that constraint is the safety contract that keeps tool-scoped calls
+    (the [kimi] implementer offload) from silently switching transports."""
+    section = _settings_section()
+    row = next(ln for ln in section.splitlines()
+               if "kimi.transport" in ln and ln.lstrip().startswith("|"))
+    assert "tool-less" in row.lower(), \
+        f"kimi.transport row must name the tool-less-only fallback: {row!r}"
+
+
 def test_kimi_offload_documented_as_default_off():
     """The offload kill-switch must be visibly default-off in the doc."""
     mod = _load_settings()

@@ -235,7 +235,11 @@ Optional flags (both opt-in, both default off):
   leave it out of `--expect-lanes`).
   Expect ~30-90s of extra wall-clock latency typically (the invocation
   timeout defaults to 300s, tunable via the `kimi.timeout_secs` setting)
-  and note that Kimi tokens bill separately from Claude. When the flag
+  and note that Kimi tokens bill separately from Claude. When the
+  API-key path times out or hits quota, the bridge auto-falls-back to
+  the standalone `kimi` CLI (tool-less calls only — the `[kimi]`
+  implementer offload never switches transports because the CLI cannot
+  scope tools); see the `kimi.transport` setting. When the flag
   is absent, consult
   `ucw-settings.py get kimi.review` — if it resolves true, run the lane
   exactly as if `--with-kimi` had been passed.
@@ -315,6 +319,9 @@ after the `opinion` token; `--diff` sends `git diff` output instead.
 
    Typical latency is ~30-90s; the invocation timeout defaults to 300s,
    tunable via the `kimi.timeout_secs` setting (or `UCW_KIMI_TIMEOUT_SECS`).
+   When the API-key path times out or hits a quota/auth error, the bridge
+   auto-falls-back to the standalone `kimi` CLI (subscription OAuth) for
+   tool-less calls like this one — tunable via the `kimi.transport` setting.
 2. Print the answer VERBATIM under an explicit banner:
 
    ```
@@ -461,6 +468,7 @@ Key registry:
 | `kimi.offload` | bool | `false` | honor `[kimi]` plan-task tags (consulted by the implementer) — kill-switch that keeps unattended auto-mode runs from spending Kimi tokens |
 | `kimi.model` | str | `kimi-k3` | model id passed to the claude-kimi bridge (consulted by `kimi_invoke` when `--model` is absent; exported to the subprocess as `KIMI_MODEL`) |
 | `kimi.timeout_secs` | int | `300` | per-invocation timeout in seconds for any headless Kimi call (consulted by `kimi_invoke` when `--timeout` is absent) |
+| `kimi.transport` | enum (`auto` \| `claude-kimi` \| `kimi-cli`) | `auto` | Kimi bridge transport (consulted by `kimi_invoke` when `--transport` is absent): `claude-kimi` = API-key wrapper, `kimi-cli` = standalone subscription CLI, `auto` = claude-kimi with kimi-cli fallback on timeout/api-error for tool-less calls |
 | `review.default` | enum (`full` \| `quick`) | `full` | default review depth (consulted by the `/ucw review` dispatch when `--full`/`--quick` are absent) |
 | `ship.push` | bool | `true` | push the branch after commit (consulted by the `/ucw ship` land step when `--no-push` is absent) |
 | `ship.pr` | bool | `false` | open a draft PR after push (consulted by the `/ucw ship` PR step when `--pr` is absent) |

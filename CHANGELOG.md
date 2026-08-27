@@ -5,6 +5,34 @@ loosely, semver in spirit.
 
 ## [Unreleased]
 
+### Added — Kimi transport fallback (claude-kimi → standalone kimi CLI)
+
+Motivation, verified live: during a quota-exhausted window the Kimi For
+Coding API key gets 403s and headless `claude-kimi` calls can hang until
+timeout, so every Kimi lane silently degrades to zero findings — while
+the standalone `kimi` CLI (`~/.kimi-code/bin/kimi`, subscription OAuth,
+separate auth) keeps working. `bin/kimi_invoke.py` now supports both
+behind a transport chain:
+
+- New `kimi.transport` setting (enum `auto` | `claude-kimi` |
+  `kimi-cli`, default `auto`; env override `UCW_KIMI_TRANSPORT`, CLI
+  flag `--transport`), resolved with the usual explicit > env >
+  settings > default precedence.
+- `auto` keeps today's behavior (claude-kimi first) and falls back to
+  the standalone CLI ONLY when the claude-kimi attempt failed with a
+  timeout or `api_error`, the `kimi` binary is on PATH, AND the call is
+  tool-less (`allowed_tools is None`). Conservative on purpose: the CLI
+  has no `--allowedTools` equivalent, so tool-scoped calls — the
+  `[kimi]` implementer offload in particular — never silently switch
+  transports. There is no fallback from kimi-cli back to claude-kimi.
+- kimi-cli transport: `kimi -p "<prompt>"` with repeatable `--add-dir`;
+  never passes `-m` (the CLI resolves model aliases from its own
+  config.toml, not `KIMI_MODEL`); strips the CLI's leading "• " stdout
+  bullets per line before JSON extraction / raw return; stderr
+  session-resume noise is ignored. The same API-error screen applies.
+- Result dicts carry a `transport` key naming the transport that
+  produced the final result (or was last tried).
+
 ### Fixed / Changed — audit-fixes wave (QW1–QW6, WP1–WP4, kimi api-error)
 
 One coordinated pass over eleven confirmed audit findings — the theme is

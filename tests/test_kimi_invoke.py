@@ -1,11 +1,13 @@
 """Unit tests for bin/kimi_invoke.py — the claude-kimi bridge plumbing.
 
 subprocess.run is ALWAYS mocked here: these tests make zero network calls
-and never invoke the real claude-kimi binary. What we verify is the
-plumbing around it — command construction, timeout/model resolution
-(env > project settings > default), raw mode, lenient JSON extraction
-(last block wins), retry-on-malformed, API-error screening (billing/quota
-lines printed to stdout with exit 0), and the never-raise failure contract.
+and never invoke the real claude-kimi or kimi binaries. What we verify is
+the plumbing around them — command construction, timeout/model/transport
+resolution (env > project settings > default), raw mode, lenient JSON
+extraction (last block wins), retry-on-malformed, API-error screening
+(billing/quota lines printed to stdout with exit 0), the kimi-cli
+transport (bullet stripping, no -m), the conservative auto fallback, and
+the never-raise failure contract.
 """
 from __future__ import annotations
 
@@ -14,19 +16,29 @@ import io
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load():
+def _load(which=None):
+    """Load a fresh module instance with `shutil.which` stubbed.
+
+    The auto transport probes the host PATH for a `kimi` binary — which
+    the dev box may genuinely have. Defaulting the stub to "not found"
+    keeps every test hermetic; fallback tests pass their own *which*.
+    """
     spec = importlib.util.spec_from_file_location(
         "kimi_invoke", REPO_ROOT / "bin" / "kimi_invoke.py"
     )
     module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     sys.modules["kimi_invoke"] = module
     spec.loader.exec_module(module)  # type: ignore[union-attr]
+    # Replace the module-level shutil binding with a stub namespace — never
+    # setattr the real shutil module (it is shared process-wide).
+    module.shutil = types.SimpleNamespace(which=which or (lambda _name: None))
     return module
 
 
@@ -55,6 +67,7 @@ def _make_project(tmp_path: Path, settings: dict | None = None) -> Path:
 def _isolate_resolution_env(monkeypatch) -> None:
     monkeypatch.delenv("UCW_KIMI_TIMEOUT_SECS", raising=False)
     monkeypatch.delenv("UCW_KIMI_MODEL", raising=False)
+    monkeypatch.delenv("UCW_KIMI_TRANSPORT", raising=False)
 
 
 # ---- happy path --------------------------------------------------------------
@@ -513,6 +526,282 @@ def test_invoke_returns_ok_false_when_binary_missing(monkeypatch):
     assert "not found" in result["error"]
 
 
+# ---- kimi-cli transport ------------------------------------------------------
+
+KIMI_PATH = "/home/user/.kimi-code/bin/kimi"
+
+
+def test_kimi_cli_transport_strips_bullets_and_parses_json(monkeypatch):
+    mod = _load()
+    run = mock.Mock(return_value=_completed('• {"a": 1}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("classify the change", transport="kimi-cli")
+
+    cmd = run.call_args.args[0]
+    assert cmd[:3] == ["kimi", "-p", "classify the change"]
+    assert result["ok"] is True
+    assert result["data"] == {"a": 1}
+    assert result["transport"] == "kimi-cli"
+    assert result["error"] is None
+
+
+def test_kimi_cli_transport_appends_add_dirs_but_never_model_flag(monkeypatch):
+    mod = _load()
+    run = mock.Mock(return_value=_completed('• {"ok": true}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    mod.kimi_invoke("audit the repo", add_dirs=["/srv/app", "/srv/lib"],
+                    transport="kimi-cli", model="kimi-k3")
+
+    cmd = run.call_args.args[0]
+    assert cmd.count("--add-dir") == 2
+    assert "/srv/app" in cmd and "/srv/lib" in cmd
+    # The CLI's model aliases live in its own config.toml — our id could
+    # break it, so -m must never be forwarded.
+    assert "-m" not in cmd
+    assert "kimi-k3" not in cmd
+
+
+def test_kimi_cli_raw_mode_returns_bullet_stripped_text_ignoring_stderr(monkeypatch):
+    mod = _load()
+    run = mock.Mock(return_value=_completed(
+        "• The diff looks correct.\n• One nit: rename `tmp`.",
+        stderr="Resuming session 0d3f...\n",
+    ))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("review in prose", transport="kimi-cli", raw=True)
+
+    assert result["ok"] is True
+    assert result["raw"] == "The diff looks correct.\nOne nit: rename `tmp`."
+    assert result["transport"] == "kimi-cli"
+
+
+def test_strip_bullets_handles_variants_and_leaves_plain_lines_alone():
+    mod = _load()
+
+    stripped = mod._strip_bullets(
+        '• bulleted\n•no-space\n  • indented\n• • doubled\n{"plain": 1}')
+
+    assert stripped == 'bulleted\nno-space\nindented\ndoubled\n{"plain": 1}'
+
+
+def test_kimi_cli_transport_flags_billing_403_as_api_error(monkeypatch):
+    mod = _load()
+    run = mock.Mock(return_value=_completed("• " + BILLING_403))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("anything", transport="kimi-cli", raw=True)
+
+    assert result["ok"] is False
+    assert result["error"] == "api_error"
+    assert result["transport"] == "kimi-cli"
+    assert run.call_count == 1
+
+
+def test_kimi_cli_transport_never_falls_back_to_claude_kimi(monkeypatch):
+    mod = _load(which=mock.Mock(return_value=KIMI_PATH))
+    run = mock.Mock(side_effect=subprocess.TimeoutExpired(
+        cmd=["kimi", "-p", "x"], timeout=30,
+    ))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("slow prompt", transport="kimi-cli", timeout=30)
+
+    assert run.call_count == 1
+    assert result["ok"] is False
+    assert "kimi timed out" in result["error"]
+    assert result["transport"] == "kimi-cli"
+
+
+# ---- auto transport fallback -------------------------------------------------
+
+def test_auto_falls_back_to_kimi_cli_when_claude_kimi_times_out(monkeypatch):
+    which = mock.Mock(return_value=KIMI_PATH)
+    mod = _load(which=which)
+    run = mock.Mock(side_effect=[
+        subprocess.TimeoutExpired(cmd=["claude-kimi", "-p", "x"], timeout=77),
+        _completed('• {"verdict": "pass"}'),
+    ])
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("classify", timeout=77, transport="auto")
+
+    assert run.call_count == 2
+    assert run.call_args_list[0].args[0][0] == "claude-kimi"
+    assert run.call_args_list[1].args[0][0] == "kimi"
+    # The fallback attempt gets the same timeout budget.
+    assert run.call_args_list[0].kwargs["timeout"] == 77
+    assert run.call_args_list[1].kwargs["timeout"] == 77
+    assert which.call_args.args[0] == "kimi"
+    assert result["ok"] is True
+    assert result["data"] == {"verdict": "pass"}
+    assert result["transport"] == "kimi-cli"
+
+
+def test_auto_falls_back_to_kimi_cli_on_quota_403_api_error(monkeypatch):
+    mod = _load(which=mock.Mock(return_value=KIMI_PATH))
+    run = mock.Mock(side_effect=[
+        _completed(BILLING_403),  # claude-kimi quota window, exit 0
+        _completed('• {"findings": []}'),
+    ])
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("review the diff", transport="auto")
+
+    assert run.call_count == 2
+    assert run.call_args_list[1].args[0][:2] == ["kimi", "-p"]
+    assert result["ok"] is True
+    assert result["data"] == {"findings": []}
+    assert result["transport"] == "kimi-cli"
+
+
+def test_auto_never_falls_back_when_allowed_tools_is_set(monkeypatch):
+    # The two transports have incompatible permission models — kimi CLI has
+    # no --allowedTools — so tool-scoped calls (e.g. the implementer
+    # offload) must fail loudly on claude-kimi, never silently switch.
+    mod = _load(which=mock.Mock(return_value=KIMI_PATH))
+    run = mock.Mock(return_value=_completed(BILLING_403))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("implement the fix", allowed_tools="Read,Edit",
+                             transport="auto")
+
+    assert run.call_count == 1  # no second (kimi) attempt
+    assert result["ok"] is False
+    assert result["error"] == "api_error"
+    assert result["transport"] == "claude-kimi"
+
+
+def test_auto_does_not_fall_back_when_kimi_binary_absent(monkeypatch):
+    which = mock.Mock(return_value=None)
+    mod = _load(which=which)
+    run = mock.Mock(return_value=_completed(BILLING_403))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("review the diff", transport="auto")
+
+    assert which.call_count == 1
+    assert run.call_count == 1
+    assert result["ok"] is False
+    assert result["error"] == "api_error"
+    assert result["transport"] == "claude-kimi"
+
+
+def test_auto_does_not_fall_back_on_nonzero_exit(monkeypatch):
+    # Conservative by design: only timeout and api_error signal a
+    # transport-specific outage worth retrying on the CLI.
+    mod = _load(which=mock.Mock(return_value=KIMI_PATH))
+    run = mock.Mock(return_value=_completed("", returncode=2, stderr="boom"))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("anything", transport="auto")
+
+    assert run.call_count == 1
+    assert result["ok"] is False
+    assert "exited 2" in result["error"]
+    assert result["transport"] == "claude-kimi"
+
+
+def test_auto_success_on_claude_kimi_reports_that_transport(monkeypatch):
+    mod = _load(which=mock.Mock(return_value=KIMI_PATH))
+    run = mock.Mock(return_value=_completed('{"verdict": "pass"}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("classify", transport="auto")
+
+    assert run.call_count == 1
+    assert result["ok"] is True
+    assert result["transport"] == "claude-kimi"
+
+
+# ---- transport resolution ----------------------------------------------------
+
+def test_transport_env_var_beats_settings_file(monkeypatch, tmp_path):
+    mod = _load()
+    _make_project(tmp_path, {"kimi.transport": "claude-kimi"})
+    monkeypatch.chdir(tmp_path)
+    _isolate_resolution_env(monkeypatch)
+    monkeypatch.setenv("UCW_KIMI_TRANSPORT", "kimi-cli")
+    run = mock.Mock(return_value=_completed('• {"a": 1}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("resolve me")
+
+    assert run.call_args.args[0][0] == "kimi"
+    assert result["transport"] == "kimi-cli"
+
+
+def test_transport_settings_file_beats_builtin_default(monkeypatch, tmp_path):
+    mod = _load()
+    _make_project(tmp_path, {"kimi.transport": "kimi-cli"})
+    monkeypatch.chdir(tmp_path)
+    _isolate_resolution_env(monkeypatch)
+    run = mock.Mock(return_value=_completed('• {"a": 1}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("resolve me")
+
+    assert run.call_args.args[0][0] == "kimi"
+    assert result["transport"] == "kimi-cli"
+
+
+def test_transport_defaults_to_auto_trying_claude_kimi_first(monkeypatch, tmp_path):
+    mod = _load()
+    _make_project(tmp_path)  # .ucw root exists but no settings.json
+    monkeypatch.chdir(tmp_path)
+    _isolate_resolution_env(monkeypatch)
+    run = mock.Mock(return_value=_completed('{"a": 1}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("resolve me")
+
+    assert run.call_args.args[0][0] == "claude-kimi"
+    assert result["transport"] == "claude-kimi"
+
+
+def test_explicit_transport_argument_beats_env(monkeypatch, tmp_path):
+    mod = _load()
+    _make_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    _isolate_resolution_env(monkeypatch)
+    monkeypatch.setenv("UCW_KIMI_TRANSPORT", "kimi-cli")
+    run = mock.Mock(return_value=_completed('{"a": 1}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("resolve me", transport="claude-kimi")
+
+    assert run.call_args.args[0][0] == "claude-kimi"
+    assert result["transport"] == "claude-kimi"
+
+
+def test_unknown_transport_in_settings_falls_through_to_auto(monkeypatch, tmp_path):
+    mod = _load()
+    _make_project(tmp_path, {"kimi.transport": "carrier-pigeon"})
+    monkeypatch.chdir(tmp_path)
+    _isolate_resolution_env(monkeypatch)
+    run = mock.Mock(return_value=_completed('{"a": 1}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("resolve me")
+
+    assert run.call_args.args[0][0] == "claude-kimi"
+    assert result["transport"] == "claude-kimi"
+
+
+def test_unknown_explicit_transport_fails_without_raising(monkeypatch):
+    mod = _load()
+    run = mock.Mock(return_value=_completed('{"a": 1}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    result = mod.kimi_invoke("anything", transport="carrier-pigeon")
+
+    assert run.call_count == 0
+    assert result["ok"] is False
+    assert "unknown kimi transport" in result["error"]
+
+
 # ---- standalone entry point --------------------------------------------------
 
 def test_main_exits_zero_and_prints_result_json_on_success(monkeypatch, capsys):
@@ -569,3 +858,22 @@ def test_main_forwards_raw_flag_and_model_option(monkeypatch, capsys):
     assert body["data"] is None
     assert body["raw"] == "plain prose verdict, no JSON"
     assert run.call_args.kwargs["env"]["KIMI_MODEL"] == "kimi-k3-turbo"
+
+
+def test_main_transport_flag_overrides_env_and_settings(monkeypatch, capsys, tmp_path):
+    mod = _load()
+    _make_project(tmp_path, {"kimi.transport": "claude-kimi"})
+    monkeypatch.chdir(tmp_path)
+    _isolate_resolution_env(monkeypatch)
+    monkeypatch.setenv("UCW_KIMI_TRANSPORT", "claude-kimi")
+    run = mock.Mock(return_value=_completed('• {"a": 1}'))
+    monkeypatch.setattr(mod.subprocess, "run", run)
+
+    rc = mod.main(["classify", "--transport", "kimi-cli", "--timeout", "5"])
+
+    body = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert run.call_args.args[0][:2] == ["kimi", "-p"]
+    assert body["ok"] is True
+    assert body["data"] == {"a": 1}
+    assert body["transport"] == "kimi-cli"

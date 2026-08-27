@@ -66,6 +66,13 @@ REGISTRY: dict[str, Spec] = {
         "int", 300,
         "per-invocation timeout in seconds for any headless Kimi call "
         "(consulted by kimi_invoke when --timeout absent)"),
+    "kimi.transport": Spec(
+        "enum", "auto",
+        "Kimi bridge transport (consulted by kimi_invoke): claude-kimi = "
+        "API-key wrapper, kimi-cli = standalone subscription CLI, auto = "
+        "claude-kimi with kimi-cli fallback on timeout/api-error for "
+        "tool-less calls",
+        choices=("auto", "claude-kimi", "kimi-cli")),
     "review.default": Spec(
         "enum", "full",
         "default review depth (consulted by /ucw review dispatch when "
