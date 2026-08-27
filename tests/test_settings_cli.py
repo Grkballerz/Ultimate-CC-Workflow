@@ -59,6 +59,7 @@ def test_get_default_values(project, capsys):
         ("kimi.offload", False),
         ("kimi.model", "kimi-k3"),
         ("kimi.timeout_secs", 300),
+        ("kimi.transport", "auto"),
         ("review.default", "full"),
         ("ship.push", True),
         ("ship.pr", False),
@@ -144,6 +145,65 @@ def test_kimi_timeout_secs_default_is_300(project, capsys):
     body = json.loads(capsys.readouterr().out)
     assert rc == 0
     assert body == {"key": "kimi.timeout_secs", "value": 300, "source": "default"}
+
+
+def test_kimi_transport_key_registered_with_default_auto(project, capsys):
+    """kimi_invoke resolves its transport from this key — default auto."""
+    mod = _load()
+    spec = mod.REGISTRY["kimi.transport"]
+    assert spec.type == "enum"
+    assert spec.default == "auto"
+    assert spec.choices == ("auto", "claude-kimi", "kimi-cli")
+    assert "kimi_invoke" in spec.help  # names the consumer, like the other keys
+    rc = mod.main(["get", "kimi.transport"])
+    body = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert body == {"key": "kimi.transport", "value": "auto", "source": "default"}
+
+
+def test_kimi_transport_set_round_trip(project, capsys):
+    mod = _load()
+    for value in ("claude-kimi", "kimi-cli", "auto"):
+        rc = mod.main(["set", "kimi.transport", value])
+        assert rc == 0
+        capsys.readouterr()
+        mod.main(["get", "kimi.transport"])
+        body = json.loads(capsys.readouterr().out)
+        assert body == {"key": "kimi.transport", "value": value,
+                        "source": "project"}
+
+
+def test_kimi_transport_rejects_bad_enum(project, capsys):
+    mod = _load()
+    rc = mod.main(["set", "kimi.transport", "carrier-pigeon"])
+    err = json.loads(capsys.readouterr().err)
+    assert rc == 2
+    assert "auto" in err["error"]
+    assert "claude-kimi" in err["error"]
+    assert "kimi-cli" in err["error"]
+    # rejected set must not create the backing store
+    assert not (project / ".ucw" / "state" / "settings.json").exists()
+
+
+def test_kimi_transport_env_override(project, capsys, monkeypatch):
+    mod = _load()
+    mod.main(["set", "kimi.transport", "claude-kimi"])
+    capsys.readouterr()
+    monkeypatch.setenv("UCW_KIMI_TRANSPORT", "kimi-cli")
+
+    mod.main(["get", "kimi.transport"])
+    body = json.loads(capsys.readouterr().out)
+    assert body == {"key": "kimi.transport", "value": "kimi-cli",
+                    "source": "env"}
+
+
+def test_kimi_transport_invalid_env_falls_through(project, capsys, monkeypatch):
+    mod = _load()
+    monkeypatch.setenv("UCW_KIMI_TRANSPORT", "smoke-signals")
+    mod.main(["get", "kimi.transport"])
+    body = json.loads(capsys.readouterr().out)
+    assert body == {"key": "kimi.transport", "value": "auto",
+                    "source": "default"}
 
 
 # ---- auto-mode-consulted defaults --------------------------------------------

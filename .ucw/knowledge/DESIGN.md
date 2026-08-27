@@ -53,4 +53,5 @@ Format: `YYYY-MM-DD — Decision — Because …`
 - 2026-08-23 — Gates fail loudly under strict conditions — Because a green verify that ran zero tools (missing pytest/ruff) under auto-commit was the audit's worst failure mode; strict = verify/land phase or auto-level >= 2.
 - 2026-08-23 — Review lanes emit lane-done receipts; gate --expect-lanes fails on missing lanes — Because dead reviewers were indistinguishable from a clean review (empty store passed the gate).
 - 2026-08-23 — Reviewer agents may hold Write only with audited write-scope frontmatter confined to .ucw/state/ — Because report files need writing but reviewers must not be able to tamper with reviewed sources; audit demotes to a kept-visible nit.
+- 2026-08-27 — kimi_invoke gained a transport chain (kimi.transport: auto | claude-kimi | kimi-cli); auto falls back to the standalone kimi CLI on timeout/API error for tool-less calls only — Because the API-key wrapper hangs during quota windows while the CLI's subscription OAuth keeps working; tool-scoped calls never switch transports since the CLI cannot scope tools.
 <!-- scribe-adr-end -->
